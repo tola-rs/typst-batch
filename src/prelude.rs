@@ -10,7 +10,7 @@ pub use crate::process::{AccessedDeps, CompileSession, WithInputs};
 #[cfg(feature = "batch")]
 pub use crate::process::batch::Batcher;
 #[cfg(feature = "batch")]
-pub use crate::world::FileSnapshot;
+pub use crate::world::SourceSnapshot;
 
 
 // Fast Scanning (5-20x faster than compile)
@@ -41,10 +41,7 @@ pub use crate::resource::font::{get_fonts, init_fonts_with_options, FontOptions}
 pub use crate::resource::library::{create_library_with_inputs, GLOBAL_LIBRARY};
 
 // World
-pub use crate::world::{
-    clear_thread_local_cache, normalize_path, CacheStrategy, FontStrategy, LibraryStrategy,
-    LocalCache, TypstWorld, WorldBuilder,
-};
+pub use crate::world::{normalize_path, TypstWorld, WorldBuilder};
 
 // Package
 pub use crate::resource::package;

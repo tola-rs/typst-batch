@@ -267,13 +267,13 @@ impl Extractor for LinkExtractor {
         }
 
         // Extract image source paths
-        if let Some(image) = elem.to_packed::<ImageElem>() {
-            if let DataSource::Path(path) = &image.source.source {
-                self.links.push(Link {
-                    dest: path.to_string(),
-                    source: LinkSource::Image,
-                });
-            }
+        if let Some(image) = elem.to_packed::<ImageElem>()
+            && let DataSource::Path(path) = &image.source.source
+        {
+            self.links.push(Link {
+                dest: path.to_string(),
+                source: LinkSource::Image,
+            });
         }
 
         ControlFlow::Continue(())

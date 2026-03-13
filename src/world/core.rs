@@ -1,7 +1,7 @@
 //! Unified `TypstWorld` implementation.
 //!
 //! A single World implementation with configurable strategies for:
-//! - **Cache**: Local (task-local), Shared (global RwLock), Snapshot (pre-built + thread_local)
+//! - **Files**: Local cache, shared cache, or source snapshot + fallback cache
 //! - **Fonts**: None (scan/query), Shared (build/serve)
 //! - **Library**: Global or Custom (with sys.inputs)
 //!
@@ -48,12 +48,11 @@ use typst::utils::LazyHash;
 use typst::{Library, World};
 
 use super::builder::WorldBuilder;
-use super::cache::{THREAD_LOCAL_FILES, THREAD_LOCAL_SOURCES};
 use super::path::normalize_path;
-use super::strategy::{CacheStrategy, FontStrategy, LibraryStrategy};
+use super::source::read_source_with_injection;
+use super::strategy::{FileCacheMode, FontMode, LibraryMode};
 use crate::resource::file::{
-    decode_utf8, file_id_from_path, read_with_global_virtual, record_file_access, FileSlot,
-    GLOBAL_FILE_CACHE,
+    file_id_from_path, read_with_global_virtual, record_file_access, GLOBAL_FILE_CACHE,
 };
 use crate::resource::font::get_fonts;
 use crate::resource::library::GLOBAL_LIBRARY;
@@ -85,9 +84,9 @@ pub type Timestamp = DateTime<Utc>;
 pub struct TypstWorld {
     root: PathBuf,
     main: FileId,
-    cache: CacheStrategy,
-    fonts: FontStrategy,
-    library: LibraryStrategy,
+    cache: FileCacheMode,
+    fonts: FontMode,
+    library: LibraryMode,
     prelude: Option<String>,
     postlude: Option<String>,
     timestamp: Option<Timestamp>,
@@ -107,9 +106,9 @@ impl TypstWorld {
     pub(crate) fn new(
         main_path: &Path,
         root: &Path,
-        cache: CacheStrategy,
-        fonts: FontStrategy,
-        library: LibraryStrategy,
+        cache: FileCacheMode,
+        fonts: FontMode,
+        library: LibraryMode,
         prelude: Option<String>,
         postlude: Option<String>,
         timestamp: Option<Timestamp>,
@@ -156,7 +155,7 @@ impl TypstWorld {
 
     fn get_source(&self, id: FileId) -> FileResult<Source> {
         match &self.cache {
-            CacheStrategy::Local(local) => {
+            FileCacheMode::Local(local) => {
                 if let Some(source) = local.sources.read().unwrap().get(&id) {
                     return Ok(source.clone());
                 }
@@ -164,36 +163,30 @@ impl TypstWorld {
                 local.sources.write().unwrap().insert(id, source.clone());
                 Ok(source)
             }
-            CacheStrategy::Shared => {
+            FileCacheMode::Shared => {
                 // For main file with prelude/postlude, use load_source to inject them
                 // (global cache doesn't know about per-world prelude settings)
                 if id == self.main && (self.prelude.is_some() || self.postlude.is_some()) {
                     return self.load_source(id);
                 }
-                let mut cache = GLOBAL_FILE_CACHE.write();
-                let slot = cache.entry(id).or_insert_with(|| FileSlot::new(id));
-                slot.source_with_global_virtual(&self.root)
+                GLOBAL_FILE_CACHE.source_with_global_virtual(id, &self.root)
             }
-            CacheStrategy::Snapshot(snapshot) => {
+            FileCacheMode::Snapshot { snapshot, fallback } => {
                 if let Some(source) = snapshot.get_source(id) {
                     record_file_access(id);
                     return Ok(source);
                 }
-                let local_hit =
-                    THREAD_LOCAL_SOURCES.with(|c| c.borrow().get(&id).cloned());
-                if let Some(source) = local_hit {
-                    return Ok(source);
+                if id == self.main && (self.prelude.is_some() || self.postlude.is_some()) {
+                    return self.load_source(id);
                 }
-                let source = self.load_source(id)?;
-                THREAD_LOCAL_SOURCES.with(|c| c.borrow_mut().insert(id, source.clone()));
-                Ok(source)
+                fallback.source_with_global_virtual(id, &self.root)
             }
         }
     }
 
     fn get_file(&self, id: FileId) -> FileResult<Bytes> {
         match &self.cache {
-            CacheStrategy::Local(local) => {
+            FileCacheMode::Local(local) => {
                 if let Some(bytes) = local.files.read().unwrap().get(&id) {
                     return Ok(bytes.clone());
                 }
@@ -201,50 +194,22 @@ impl TypstWorld {
                 local.files.write().unwrap().insert(id, bytes.clone());
                 Ok(bytes)
             }
-            CacheStrategy::Shared => {
-                let mut cache = GLOBAL_FILE_CACHE.write();
-                let slot = cache.entry(id).or_insert_with(|| FileSlot::new(id));
-                slot.file_with_global_virtual(&self.root)
-            }
-            CacheStrategy::Snapshot(snapshot) => {
-                if let Some(bytes) = snapshot.get_file(id) {
-                    record_file_access(id);
-                    return Ok(bytes);
-                }
-                let local_hit = THREAD_LOCAL_FILES.with(|c| c.borrow().get(&id).cloned());
-                if let Some(bytes) = local_hit {
-                    return Ok(bytes);
-                }
-                let bytes = self.load_file(id)?;
-                THREAD_LOCAL_FILES.with(|c| c.borrow_mut().insert(id, bytes.clone()));
-                Ok(bytes)
+            FileCacheMode::Shared => GLOBAL_FILE_CACHE.file_with_global_virtual(id, &self.root),
+            FileCacheMode::Snapshot { fallback, .. } => {
+                fallback.file_with_global_virtual(id, &self.root)
             }
         }
     }
 
     fn load_source(&self, id: FileId) -> FileResult<Source> {
         record_file_access(id);
-        let bytes = read_with_global_virtual(id, &self.root)?;
-        let text = decode_utf8(&bytes)?;
-
-        // Inject prelude/postlude for main file (fallback for non-snapshot usage)
-        let text = if id == self.main {
-            let mut result = String::new();
-            if let Some(prelude) = &self.prelude {
-                result.push_str(prelude);
-                result.push('\n');
-            }
-            result.push_str(text);
-            if let Some(postlude) = &self.postlude {
-                result.push('\n');
-                result.push_str(postlude);
-            }
-            result
-        } else {
-            text.into()
-        };
-
-        Ok(Source::new(id, text))
+        read_source_with_injection(
+            id,
+            &self.root,
+            id == self.main,
+            self.prelude.as_deref(),
+            self.postlude.as_deref(),
+        )
     }
 
     fn load_file(&self, id: FileId) -> FileResult<Bytes> {
@@ -261,15 +226,15 @@ impl TypstWorld {
 impl World for TypstWorld {
     fn library(&self) -> &LazyHash<Library> {
         match &self.library {
-            LibraryStrategy::Global => &GLOBAL_LIBRARY,
-            LibraryStrategy::Custom(lib) => lib,
+            LibraryMode::Global => &GLOBAL_LIBRARY,
+            LibraryMode::Custom(lib) => lib,
         }
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
         match self.fonts {
-            FontStrategy::None => empty_fontbook(),
-            FontStrategy::Shared => &get_fonts(&[]).1,
+            FontMode::None => empty_fontbook(),
+            FontMode::Shared => &get_fonts(&[]).1,
         }
     }
 
@@ -287,8 +252,8 @@ impl World for TypstWorld {
 
     fn font(&self, index: usize) -> Option<Font> {
         match self.fonts {
-            FontStrategy::None => None,
-            FontStrategy::Shared => get_fonts(&[]).0.fonts.get(index)?.get(),
+            FontMode::None => None,
+            FontMode::Shared => get_fonts(&[]).0.fonts.get(index)?.get(),
         }
     }
 

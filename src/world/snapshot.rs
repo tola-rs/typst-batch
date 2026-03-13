@@ -3,13 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use typst::diag::FileResult;
-use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source, VirtualPath};
 
 use super::path::normalize_path;
-use crate::resource::file::{decode_utf8, file_id_from_path, read_with_global_virtual};
+use super::source::{read_source, read_source_with_injection};
+use crate::resource::file::file_id_from_path;
 
 /// Error when building a file snapshot.
 #[derive(Debug)]
@@ -41,16 +41,15 @@ pub struct SnapshotConfig {
     pub postlude: Option<String>,
 }
 
-/// Immutable file content snapshot for lock-free parallel access.
+/// Immutable source snapshot for lock-free parallel access.
 ///
 /// Built once before parallel compilation, then shared across all threads.
 #[derive(Clone)]
-pub struct FileSnapshot {
+pub struct SourceSnapshot {
     sources: Arc<FxHashMap<FileId, Source>>,
-    files: Arc<FxHashMap<FileId, Bytes>>,
 }
 
-impl FileSnapshot {
+impl SourceSnapshot {
     /// Build a snapshot by pre-scanning all content files and their imports.
     ///
     /// Returns an error if any content file fails to load.
@@ -83,7 +82,7 @@ impl FileSnapshot {
         let root = normalize_path(root);
 
         // Collect main file IDs for prelude injection
-        let main_ids: rustc_hash::FxHashSet<FileId> = content_files
+        let main_ids: FxHashSet<FileId> = content_files
             .iter()
             .filter_map(|p| file_id_from_path(p, &root))
             .collect();
@@ -92,7 +91,6 @@ impl FileSnapshot {
 
         Ok(Self {
             sources: Arc::new(sources),
-            files: Arc::new(FxHashMap::default()),
         })
     }
 
@@ -100,12 +98,6 @@ impl FileSnapshot {
     #[inline]
     pub fn get_source(&self, id: FileId) -> Option<Source> {
         self.sources.get(&id).cloned()
-    }
-
-    /// Gets cached file bytes by file ID.
-    #[inline]
-    pub fn get_file(&self, id: FileId) -> Option<Bytes> {
-        self.files.get(&id).cloned()
     }
 
     /// Returns the number of cached sources.
@@ -123,7 +115,7 @@ fn load_sources_with_imports(
     content_files: &[PathBuf],
     root: &Path,
     config: &SnapshotConfig,
-    main_ids: &rustc_hash::FxHashSet<FileId>,
+    main_ids: &FxHashSet<FileId>,
     on_load: impl Fn(&Path) + Sync,
 ) -> Result<FxHashMap<FileId, Source>, SnapshotError> {
     use rayon::prelude::*;
@@ -176,8 +168,13 @@ fn load_sources_with_imports(
 
     // Collect imports from initial files (prelude imports are included since prelude was injected)
     let mut pending: Vec<FileId> = Vec::new();
+    let mut queued: FxHashSet<FileId> = FxHashSet::default();
     for (id, source) in initial {
-        pending.extend(parse_imports(&source));
+        for import_id in parse_imports(&source) {
+            if queued.insert(import_id) {
+                pending.push(import_id);
+            }
+        }
         sources.lock().unwrap().insert(id, source);
     }
 
@@ -199,7 +196,7 @@ fn load_sources_with_imports(
         // or optional files that will be handled at compile time)
         let results: Vec<_> = batch
             .par_iter()
-            .filter_map(|&id| load_source(id, root).ok().map(|s| (id, s)))
+            .filter_map(|&id| read_source(id, root).ok().map(|s| (id, s)))
             .collect();
 
         let mut sources = sources.lock().unwrap();
@@ -208,7 +205,7 @@ fn load_sources_with_imports(
                 continue;
             }
             for import_id in parse_imports(&source) {
-                if !sources.contains_key(&import_id) {
+                if !sources.contains_key(&import_id) && queued.insert(import_id) {
                     pending.push(import_id);
                 }
             }
@@ -224,35 +221,15 @@ fn load_source_with_injection(
     id: FileId,
     root: &Path,
     config: &SnapshotConfig,
-    main_ids: &rustc_hash::FxHashSet<FileId>,
+    main_ids: &FxHashSet<FileId>,
 ) -> FileResult<Source> {
-    let bytes = read_with_global_virtual(id, root)?;
-    let text = decode_utf8(&bytes)?;
-
-    // Inject prelude/postlude for main files
-    let text = if main_ids.contains(&id) {
-        let mut result = String::new();
-        if let Some(prelude) = &config.prelude {
-            result.push_str(prelude);
-            result.push('\n');
-        }
-        result.push_str(text);
-        if let Some(postlude) = &config.postlude {
-            result.push('\n');
-            result.push_str(postlude);
-        }
-        result
-    } else {
-        text.into()
-    };
-
-    Ok(Source::new(id, text))
-}
-
-fn load_source(id: FileId, root: &Path) -> FileResult<Source> {
-    let bytes = read_with_global_virtual(id, root)?;
-    let text = decode_utf8(&bytes)?;
-    Ok(Source::new(id, text.into()))
+    read_source_with_injection(
+        id,
+        root,
+        main_ids.contains(&id),
+        config.prelude.as_deref(),
+        config.postlude.as_deref(),
+    )
 }
 
 // ============================================================================

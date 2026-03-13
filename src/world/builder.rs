@@ -6,9 +6,9 @@ use std::sync::Arc;
 use typst::foundations::Dict;
 
 use super::core::{Timestamp, TypstWorld};
-use super::snapshot::FileSnapshot;
-use super::strategy::{CacheStrategy, FontStrategy, LibraryStrategy};
-use crate::resource::library::create_library_with_inputs;
+use super::snapshot::SourceSnapshot;
+use super::strategy::{FileCacheMode, FontMode, LibraryMode};
+use crate::resource::file::SharedFileCache;
 
 /// Builder for configuring `TypstWorld`.
 ///
@@ -16,9 +16,9 @@ use crate::resource::library::create_library_with_inputs;
 pub struct WorldBuilder {
     main_path: PathBuf,
     root: PathBuf,
-    cache: Option<CacheStrategy>,
-    fonts: Option<FontStrategy>,
-    library: LibraryStrategy,
+    cache: Option<FileCacheMode>,
+    fonts: Option<FontMode>,
+    library: LibraryMode,
     prelude: Option<String>,
     postlude: Option<String>,
     timestamp: Option<Timestamp>,
@@ -32,7 +32,7 @@ impl WorldBuilder {
             root: root.to_path_buf(),
             cache: None,
             fonts: None,
-            library: LibraryStrategy::Global,
+            library: LibraryMode::Global,
             prelude: None,
             postlude: None,
             timestamp: None,
@@ -47,7 +47,7 @@ impl WorldBuilder {
     ///
     /// Best for: isolated compilations, scanning operations.
     pub fn with_local_cache(mut self) -> Self {
-        self.cache = Some(CacheStrategy::local());
+        self.cache = Some(FileCacheMode::local());
         self
     }
 
@@ -55,15 +55,25 @@ impl WorldBuilder {
     ///
     /// Best for: hot reload, incremental updates where files change frequently.
     pub fn with_shared_cache(mut self) -> Self {
-        self.cache = Some(CacheStrategy::shared());
+        self.cache = Some(FileCacheMode::shared());
         self
     }
 
     /// Use pre-built immutable snapshot for lock-free parallel access.
     ///
     /// Best for: batch compilation where files are pre-scanned.
-    pub fn with_snapshot(mut self, snapshot: Arc<FileSnapshot>) -> Self {
-        self.cache = Some(CacheStrategy::snapshot(snapshot));
+    pub fn with_snapshot(mut self, snapshot: Arc<SourceSnapshot>) -> Self {
+        self.cache = Some(FileCacheMode::snapshot(snapshot));
+        self
+    }
+
+    /// Use a pre-built snapshot with an explicit shared fallback cache.
+    pub(crate) fn with_snapshot_and_fallback(
+        mut self,
+        snapshot: Arc<SourceSnapshot>,
+        fallback: Arc<SharedFileCache>,
+    ) -> Self {
+        self.cache = Some(FileCacheMode::snapshot_with_fallback(snapshot, fallback));
         self
     }
 
@@ -75,7 +85,7 @@ impl WorldBuilder {
     ///
     /// Best for: scanning/query operations that don't require layout.
     pub fn no_fonts(mut self) -> Self {
-        self.fonts = Some(FontStrategy::None);
+        self.fonts = Some(FontMode::None);
         self
     }
 
@@ -83,7 +93,7 @@ impl WorldBuilder {
     ///
     /// Best for: compilation operations that require layout/rendering.
     pub fn with_fonts(mut self) -> Self {
-        self.fonts = Some(FontStrategy::Shared);
+        self.fonts = Some(FontMode::Shared);
         self
     }
 
@@ -98,13 +108,13 @@ impl WorldBuilder {
             .into_iter()
             .map(|(k, v)| (k.into(), v.into_value()))
             .collect();
-        self.library = LibraryStrategy::Custom(create_library_with_inputs(dict));
+        self.library = LibraryMode::custom(dict);
         self
     }
 
     /// Configure `sys.inputs` from a pre-built `Dict`.
     pub fn with_inputs_dict(mut self, inputs: Dict) -> Self {
-        self.library = LibraryStrategy::Custom(create_library_with_inputs(inputs));
+        self.library = LibraryMode::custom(inputs);
         self
     }
 

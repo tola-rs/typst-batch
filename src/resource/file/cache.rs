@@ -4,17 +4,19 @@
 //!
 //! ```text
 //! GLOBAL_FILE_CACHE (shared across all compilations)
-//! └── FxHashMap<FileId, FileSlot>
-//!     └── FileSlot
-//!         ├── source: SlotCell<Source>  ─┐
-//!         └── file: SlotCell<Bytes>     ─┼── Fingerprint-based invalidation
+//! └── SharedFileCache
+//!     └── FxHashMap<FileId, Arc<Mutex<FileSlot>>>
+//!         └── FileSlot
+//!             ├── source: SlotCell<Source>  ─┐
+//!             └── file: SlotCell<Bytes>     ─┼── Fingerprint-based invalidation
 //! ```
 
+use std::sync::Arc;
 use std::mem;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashMap;
 use typst::diag::FileResult;
 use typst::foundations::Bytes;
@@ -29,6 +31,50 @@ use crate::resource::file::read::read_with_virtual;
 // Global File Cache
 // =============================================================================
 
+/// Shared cache keyed by `FileId`.
+///
+/// Each file gets its own lock, so unrelated files can be processed in parallel
+/// without contending on the whole cache map.
+#[derive(Default)]
+pub struct SharedFileCache {
+    slots: RwLock<FxHashMap<FileId, Arc<Mutex<FileSlot>>>>,
+}
+
+impl SharedFileCache {
+    /// Create an empty shared cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clear all cached slots.
+    pub fn clear(&self) {
+        self.slots.write().clear();
+    }
+
+    /// Read and cache source text using the global virtual file system.
+    pub fn source_with_global_virtual(&self, id: FileId, root: &Path) -> FileResult<Source> {
+        self.slot(id).lock().source_with_global_virtual(root)
+    }
+
+    /// Read and cache raw bytes using the global virtual file system.
+    pub fn file_with_global_virtual(&self, id: FileId, root: &Path) -> FileResult<Bytes> {
+        self.slot(id).lock().file_with_global_virtual(root)
+    }
+
+    fn slot(&self, id: FileId) -> Arc<Mutex<FileSlot>> {
+        if let Some(slot) = self.slots.read().get(&id) {
+            return Arc::clone(slot);
+        }
+
+        let mut slots = self.slots.write();
+        Arc::clone(
+            slots
+                .entry(id)
+                .or_insert_with(|| Arc::new(Mutex::new(FileSlot::new(id)))),
+        )
+    }
+}
+
 /// Global shared file cache - reused across all compilations.
 ///
 /// # Design Notes
@@ -39,15 +85,14 @@ use crate::resource::file::read::read_with_virtual;
 /// For correct cross-project usage:
 /// - Call `reset_access_flags()` before each compilation
 /// - Call `clear_file_cache()` when switching between different projects
-pub static GLOBAL_FILE_CACHE: LazyLock<RwLock<FxHashMap<FileId, FileSlot>>> =
-    LazyLock::new(|| RwLock::new(FxHashMap::default()));
+pub static GLOBAL_FILE_CACHE: LazyLock<SharedFileCache> = LazyLock::new(SharedFileCache::new);
 
 /// Clear the global file cache.
 ///
 /// Call when template/dependency files change to ensure fresh data is loaded.
 /// This also clears the comemo cache.
 pub fn clear_file_cache() {
-    GLOBAL_FILE_CACHE.write().clear();
+    GLOBAL_FILE_CACHE.clear();
     typst::comemo::evict(0);
 }
 

@@ -4,12 +4,11 @@ mod builder;
 mod cache;
 mod core;
 mod path;
+mod source;
 mod snapshot;
 mod strategy;
 
 pub use builder::WorldBuilder;
-pub use cache::{clear_thread_local_cache, LocalCache};
 pub use core::{Timestamp, TypstWorld};
 pub use path::normalize_path;
-pub use snapshot::{FileSnapshot, SnapshotConfig, SnapshotError};
-pub use strategy::{CacheStrategy, FontStrategy, LibraryStrategy};
+pub use snapshot::{SnapshotConfig, SnapshotError, SourceSnapshot};

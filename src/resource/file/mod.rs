@@ -41,7 +41,7 @@ mod read;
 mod vfs;
 
 pub use access::{get_accessed_files, record_file_access, reset_access_flags};
-pub use cache::{clear_file_cache, FileSlot, SlotCell, GLOBAL_FILE_CACHE};
+pub use cache::{clear_file_cache, FileSlot, SharedFileCache, SlotCell, GLOBAL_FILE_CACHE};
 pub use read::{
     decode_utf8, file_id, file_id_from_path, read_file, read_with_global_virtual, virtual_file_id,
     EMPTY_ID, STDIN_ID,

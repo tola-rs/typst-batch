@@ -1,6 +1,6 @@
 [package]
 name = "typst-batch"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 license = "MIT"
 description = "Typst helper library for batch processing — friendly API, shared resources, virtual files, customizable diagnostics"
@@ -32,7 +32,10 @@ parking_lot = "0.12"
 rayon = { version = "1.10", optional = true }
 
 # Utilities
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "std",
+] }
 rustc-hash = "2.1"
 serde_json = "1.0"
 
