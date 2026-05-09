@@ -37,7 +37,7 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::diag::FileResult;
@@ -51,10 +51,7 @@ use super::builder::WorldBuilder;
 use super::path::normalize_path;
 use super::source::read_source_with_injection;
 use super::strategy::{FileCacheMode, FontMode, LibraryMode};
-use crate::resource::file::{
-    file_id_from_path, read_with_global_virtual, record_file_access, GLOBAL_FILE_CACHE,
-};
-use crate::resource::font::get_fonts;
+use crate::resource::file::{file_id_from_path, record_file_access, FileResolver};
 use crate::resource::library::GLOBAL_LIBRARY;
 
 // =============================================================================
@@ -84,6 +81,7 @@ pub type Timestamp = DateTime<Utc>;
 pub struct TypstWorld {
     root: PathBuf,
     main: FileId,
+    files: Arc<FileResolver>,
     cache: FileCacheMode,
     fonts: FontMode,
     library: LibraryMode,
@@ -106,6 +104,7 @@ impl TypstWorld {
     pub(crate) fn new(
         main_path: &Path,
         root: &Path,
+        files: Arc<FileResolver>,
         cache: FileCacheMode,
         fonts: FontMode,
         library: LibraryMode,
@@ -124,6 +123,7 @@ impl TypstWorld {
         Self {
             root,
             main,
+            files,
             cache,
             fonts,
             library,
@@ -136,6 +136,11 @@ impl TypstWorld {
     /// Get the project root directory.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Get the file resolver used by this world.
+    pub(crate) fn files(&self) -> &FileResolver {
+        &self.files
     }
 
     /// Get the number of lines in the prelude (for diagnostic line offset).
@@ -163,13 +168,13 @@ impl TypstWorld {
                 local.sources.write().unwrap().insert(id, source.clone());
                 Ok(source)
             }
-            FileCacheMode::Shared => {
+            FileCacheMode::Shared(shared) => {
                 // For main file with prelude/postlude, use load_source to inject them
-                // (global cache doesn't know about per-world prelude settings)
+                // (shared cache doesn't know about per-world prelude settings)
                 if id == self.main && (self.prelude.is_some() || self.postlude.is_some()) {
                     return self.load_source(id);
                 }
-                GLOBAL_FILE_CACHE.source_with_global_virtual(id, &self.root)
+                shared.source_with_files(id, &self.root, &self.files)
             }
             FileCacheMode::Snapshot { snapshot, fallback } => {
                 if let Some(source) = snapshot.get_source(id) {
@@ -179,7 +184,7 @@ impl TypstWorld {
                 if id == self.main && (self.prelude.is_some() || self.postlude.is_some()) {
                     return self.load_source(id);
                 }
-                fallback.source_with_global_virtual(id, &self.root)
+                fallback.source_with_files(id, &self.root, &self.files)
             }
         }
     }
@@ -194,9 +199,9 @@ impl TypstWorld {
                 local.files.write().unwrap().insert(id, bytes.clone());
                 Ok(bytes)
             }
-            FileCacheMode::Shared => GLOBAL_FILE_CACHE.file_with_global_virtual(id, &self.root),
+            FileCacheMode::Shared(shared) => shared.file_with_files(id, &self.root, &self.files),
             FileCacheMode::Snapshot { fallback, .. } => {
-                fallback.file_with_global_virtual(id, &self.root)
+                fallback.file_with_files(id, &self.root, &self.files)
             }
         }
     }
@@ -206,6 +211,7 @@ impl TypstWorld {
         read_source_with_injection(
             id,
             &self.root,
+            &self.files,
             id == self.main,
             self.prelude.as_deref(),
             self.postlude.as_deref(),
@@ -214,7 +220,7 @@ impl TypstWorld {
 
     fn load_file(&self, id: FileId) -> FileResult<Bytes> {
         record_file_access(id);
-        let data = read_with_global_virtual(id, &self.root)?;
+        let data = self.files.read(id, &self.root)?;
         Ok(Bytes::new(data))
     }
 }
@@ -232,9 +238,9 @@ impl World for TypstWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        match self.fonts {
+        match &self.fonts {
             FontMode::None => empty_fontbook(),
-            FontMode::Shared => &get_fonts(&[]).1,
+            FontMode::Shared(fonts) => &fonts.get().1,
         }
     }
 
@@ -251,9 +257,9 @@ impl World for TypstWorld {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        match self.fonts {
+        match &self.fonts {
             FontMode::None => None,
-            FontMode::Shared => get_fonts(&[]).0.fonts.get(index)?.get(),
+            FontMode::Shared(fonts) => fonts.get().0.fonts.get(index)?.get(),
         }
     }
 

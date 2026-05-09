@@ -23,6 +23,7 @@
 
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 use typst::comemo::Track;
@@ -41,7 +42,7 @@ use typst_html::{HtmlAttr, HtmlElem};
 use super::inputs::WithInputs;
 use super::session::{AccessedDeps, CompileSession};
 use crate::diagnostic::{has_errors, CompileError};
-use crate::resource::file::PackageId;
+use crate::resource::file::{FileResolver, PackageId};
 use crate::world::TypstWorld;
 
 /// Builder for fast Typst scanning (Eval-only, skips Layout).
@@ -52,6 +53,7 @@ use crate::world::TypstWorld;
 /// - HTML document creation
 pub struct Scanner<'a> {
     root: &'a Path,
+    files: Arc<FileResolver>,
     inputs: Option<Dict>,
 }
 
@@ -64,7 +66,17 @@ impl<'a> WithInputs for Scanner<'a> {
 impl<'a> Scanner<'a> {
     /// Create a new scanner with the given root directory.
     pub fn new(root: &'a Path) -> Self {
-        Self { root, inputs: None }
+        Self {
+            root,
+            files: Arc::new(FileResolver::new()),
+            inputs: None,
+        }
+    }
+
+    /// Use an explicit file resolver for this scan.
+    pub fn with_files(mut self, files: FileResolver) -> Self {
+        self.files = Arc::new(files);
+        self
     }
 
     /// Execute the scan on a single file.
@@ -77,11 +89,13 @@ impl<'a> Scanner<'a> {
     fn build_world(&self, path: &Path) -> TypstWorld {
         match &self.inputs {
             Some(inputs) => TypstWorld::builder(path, self.root)
+                .with_files(Arc::clone(&self.files))
                 .with_local_cache()
                 .no_fonts()
                 .with_inputs_dict(inputs.clone())
                 .build(),
             None => TypstWorld::builder(path, self.root)
+                .with_files(Arc::clone(&self.files))
                 .with_local_cache()
                 .no_fonts()
                 .build(),
@@ -465,7 +479,7 @@ pub(crate) fn scan_impl(world: &TypstWorld) -> Result<ScanResult, CompileError> 
         return Err(CompileError::compilation_with_offset(world, warnings.to_vec(), line_offset));
     }
 
-    let accessed = session.finish(world.root());
+    let accessed = session.finish(world.root(), world.files());
 
     Ok(ScanResult {
         content: module.content(),
@@ -479,8 +493,22 @@ pub(crate) fn scan_impl(world: &TypstWorld) -> Result<ScanResult, CompileError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource::file::{FileResolver, PackageId, VirtualFileSystem};
+    use std::path::Path;
     use std::fs;
     use tempfile::TempDir;
+
+    struct ProbeVfs(&'static str);
+
+    impl VirtualFileSystem for ProbeVfs {
+        fn read(&self, path: &Path) -> Option<Vec<u8>> {
+            (path == Path::new("/probe.txt")).then(|| self.0.as_bytes().to_vec())
+        }
+
+        fn read_package(&self, _pkg: &PackageId, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
 
     #[test]
     fn test_scanner_basic() {
@@ -508,6 +536,28 @@ mod tests {
             .with_inputs([("key", "value")])
             .scan(&file);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn scanner_uses_its_own_file_resolver() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.typ");
+        fs::write(&file, r#"#metadata(read("/probe.txt")) <probe>"#).unwrap();
+
+        let first_files = FileResolver::new().with_virtual_fs(ProbeVfs("first"));
+        let second_files = FileResolver::new().with_virtual_fs(ProbeVfs("second"));
+
+        let first = Scanner::new(dir.path())
+            .with_files(first_files)
+            .scan(&file)
+            .unwrap();
+        let second = Scanner::new(dir.path())
+            .with_files(second_files)
+            .scan(&file)
+            .unwrap();
+
+        assert_eq!(first.metadata("probe"), Some("first".into()));
+        assert_eq!(second.metadata("probe"), Some("second".into()));
     }
 
     #[test]

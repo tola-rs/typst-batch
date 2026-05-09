@@ -9,7 +9,7 @@ use typst::syntax::{FileId, Source, VirtualPath};
 
 use super::path::normalize_path;
 use super::source::{read_source, read_source_with_injection};
-use crate::resource::file::file_id_from_path;
+use crate::resource::file::{file_id_from_path, FileResolver};
 
 /// Error when building a file snapshot.
 #[derive(Debug)]
@@ -54,7 +54,13 @@ impl SourceSnapshot {
     ///
     /// Returns an error if any content file fails to load.
     pub fn build(content_files: &[PathBuf], root: &Path) -> Result<Self, SnapshotError> {
-        Self::build_with_config(content_files, root, &SnapshotConfig::default(), |_| {})
+        Self::build_with_config_and_files(
+            content_files,
+            root,
+            Arc::new(FileResolver::new()),
+            &SnapshotConfig::default(),
+            |_| {},
+        )
     }
 
     /// Build a snapshot with callback for each file loaded.
@@ -65,7 +71,13 @@ impl SourceSnapshot {
         root: &Path,
         on_load: impl Fn(&Path) + Sync,
     ) -> Result<Self, SnapshotError> {
-        Self::build_with_config(content_files, root, &SnapshotConfig::default(), on_load)
+        Self::build_with_config_and_files(
+            content_files,
+            root,
+            Arc::new(FileResolver::new()),
+            &SnapshotConfig::default(),
+            on_load,
+        )
     }
 
     /// Build a snapshot with prelude/postlude injection.
@@ -79,6 +91,23 @@ impl SourceSnapshot {
         config: &SnapshotConfig,
         on_load: impl Fn(&Path) + Sync,
     ) -> Result<Self, SnapshotError> {
+        Self::build_with_config_and_files(
+            content_files,
+            root,
+            Arc::new(FileResolver::new()),
+            config,
+            on_load,
+        )
+    }
+
+    /// Build a snapshot with an explicit file resolver.
+    pub fn build_with_config_and_files(
+        content_files: &[PathBuf],
+        root: &Path,
+        files: Arc<FileResolver>,
+        config: &SnapshotConfig,
+        on_load: impl Fn(&Path) + Sync,
+    ) -> Result<Self, SnapshotError> {
         let root = normalize_path(root);
 
         // Collect main file IDs for prelude injection
@@ -87,7 +116,8 @@ impl SourceSnapshot {
             .filter_map(|p| file_id_from_path(p, &root))
             .collect();
 
-        let sources = load_sources_with_imports(content_files, &root, config, &main_ids, on_load)?;
+        let sources =
+            load_sources_with_imports(content_files, &root, &files, config, &main_ids, on_load)?;
 
         Ok(Self {
             sources: Arc::new(sources),
@@ -114,6 +144,7 @@ impl SourceSnapshot {
 fn load_sources_with_imports(
     content_files: &[PathBuf],
     root: &Path,
+    files: &FileResolver,
     config: &SnapshotConfig,
     main_ids: &FxHashSet<FileId>,
     on_load: impl Fn(&Path) + Sync,
@@ -138,7 +169,7 @@ fn load_sources_with_imports(
                 None => return None, // Path outside root, skip
             };
 
-            match load_source_with_injection(id, root, config, main_ids) {
+            match load_source_with_injection(id, root, files, config, main_ids) {
                 Ok(source) => {
                     on_load(path);
                     Some((id, source))
@@ -196,7 +227,7 @@ fn load_sources_with_imports(
         // or optional files that will be handled at compile time)
         let results: Vec<_> = batch
             .par_iter()
-            .filter_map(|&id| read_source(id, root).ok().map(|s| (id, s)))
+            .filter_map(|&id| read_source(id, root, files).ok().map(|s| (id, s)))
             .collect();
 
         let mut sources = sources.lock().unwrap();
@@ -220,12 +251,14 @@ fn load_sources_with_imports(
 fn load_source_with_injection(
     id: FileId,
     root: &Path,
+    files: &FileResolver,
     config: &SnapshotConfig,
     main_ids: &FxHashSet<FileId>,
 ) -> FileResult<Source> {
     read_source_with_injection(
         id,
         root,
+        files,
         main_ids.contains(&id),
         config.prelude.as_deref(),
         config.postlude.as_deref(),

@@ -3,12 +3,9 @@
 //! Provides abstraction for injecting virtual content into Typst's file system.
 
 use std::path::Path;
-use std::sync::LazyLock;
 
-use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use typst::syntax::package::PackageSpec;
-use typst::syntax::VirtualPath;
 
 // =============================================================================
 // PackageVersion - Semantic Version
@@ -130,7 +127,7 @@ impl std::fmt::Display for PackageId {
 /// # Example
 ///
 /// ```ignore
-/// use typst_batch::{VirtualFileSystem, set_virtual_fs, PackageId, PackageVersion};
+/// use typst_batch::{FileResolver, VirtualFileSystem, PackageId, PackageVersion};
 /// use std::path::Path;
 ///
 /// struct MyVFS;
@@ -156,7 +153,7 @@ impl std::fmt::Display for PackageId {
 ///     }
 /// }
 ///
-/// set_virtual_fs(MyVFS);
+/// let files = FileResolver::new().with_virtual_fs(MyVFS);
 /// ```
 pub trait VirtualFileSystem: Send + Sync {
     /// Read a virtual file by path.
@@ -206,11 +203,11 @@ impl VirtualFileSystem for NoVirtualFS {
 /// # Example
 ///
 /// ```ignore
-/// use typst_batch::{MapVirtualFS, set_virtual_fs};
+/// use typst_batch::{FileResolver, MapVirtualFS};
 ///
 /// let mut vfs = MapVirtualFS::new();
 /// vfs.insert("/_data/site.json", r#"{"title":"My Blog"}"#);
-/// set_virtual_fs(vfs);
+/// let files = FileResolver::new().with_virtual_fs(vfs);
 /// ```
 #[derive(Default, Clone)]
 pub struct MapVirtualFS {
@@ -265,36 +262,4 @@ impl VirtualFileSystem for MapVirtualFS {
         let path_str = path.to_str()?;
         self.files.get(path_str).cloned()
     }
-}
-
-// =============================================================================
-// Global VFS Instance
-// =============================================================================
-
-/// Global virtual file system instance.
-static GLOBAL_VFS: LazyLock<RwLock<Box<dyn VirtualFileSystem>>> =
-    LazyLock::new(|| RwLock::new(Box::new(NoVirtualFS)));
-
-/// Set the global virtual file system.
-///
-/// Call this at application startup to enable virtual files and packages.
-pub fn set_virtual_fs<V: VirtualFileSystem + 'static>(fs: V) {
-    *GLOBAL_VFS.write() = Box::new(fs);
-}
-
-/// Read a virtual file from the global VFS.
-pub(crate) fn read_virtual(path: &Path) -> Option<Vec<u8>> {
-    GLOBAL_VFS.read().read(path)
-}
-
-/// Read a virtual package file from the global VFS.
-pub(crate) fn read_virtual_package(spec: &PackageSpec, vpath: &VirtualPath) -> Option<Vec<u8>> {
-    let pkg = PackageId::from_spec(spec);
-    let path = vpath.as_rooted_path().to_string_lossy();
-    GLOBAL_VFS.read().read_package(&pkg, &path)
-}
-
-/// Check if a path has virtual content.
-pub fn is_virtual_path(path: &Path) -> bool {
-    GLOBAL_VFS.read().read(path).is_some()
 }

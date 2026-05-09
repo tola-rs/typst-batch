@@ -1,10 +1,12 @@
-//! Global package storage with caching.
+//! Package storage configuration.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::Arc;
 
-use typst_kit::download::Downloader;
+use typst::diag::FileResult;
+use typst::syntax::package::PackageSpec;
+use typst_kit::download::{Downloader, ProgressSink};
 pub use typst_kit::package::PackageStorage;
 
 const PACKAGE_PATH_ENV: &str = "TYPST_PACKAGE_PATH";
@@ -77,42 +79,22 @@ impl Options {
     }
 }
 
-/// Global shared package storage.
-static STORAGE: OnceLock<PackageStorage> = OnceLock::new();
-
-/// Initialize package storage with default settings.
-///
-/// This can only be called once. Subsequent calls are ignored.
-/// Returns `true` if storage was initialized, `false` if already initialized.
-pub fn init() -> bool {
-    init_with_options(Options::new())
+/// Package storage owned by an explicit file resolver.
+#[derive(Clone)]
+pub(crate) struct Store {
+    storage: Arc<PackageStorage>,
 }
 
-/// Initialize package storage with custom options.
-///
-/// This can only be called once. Subsequent calls are ignored.
-/// Returns `true` if storage was initialized, `false` if already initialized.
-///
-/// # Example
-///
-/// ```ignore
-/// use typst_batch::resource::package;
-///
-/// package::init_with_options(
-///     package::Options::new()
-///         .with_user_agent("my-app/1.0.0")
-///         .with_package_path("vendor/typst/packages"),
-/// );
-/// ```
-pub fn init_with_options(options: Options) -> bool {
-    STORAGE.set(options.storage()).is_ok()
-}
+impl Store {
+    pub(crate) fn new(options: Options) -> Self {
+        Self {
+            storage: Arc::new(options.storage()),
+        }
+    }
 
-/// Get the global package storage.
-///
-/// If not explicitly initialized, uses default settings on first access.
-pub fn storage() -> &'static PackageStorage {
-    STORAGE.get_or_init(|| Options::new().storage())
+    pub(crate) fn prepare(&self, spec: &PackageSpec) -> FileResult<PathBuf> {
+        Ok(self.storage.prepare_package(spec, &mut ProgressSink)?)
+    }
 }
 
 #[cfg(test)]
@@ -215,14 +197,15 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_initialized() {
-        let _storage = storage();
-    }
+    fn test_store_prepares_from_options() {
+        let dir = TempDir::new().unwrap();
+        let package_root = dir.path().join("typst-packages");
+        let package_dir = package_root.join("preview").join("demo").join("0.1.0");
+        std::fs::create_dir_all(&package_dir).unwrap();
 
-    #[test]
-    fn test_storage_is_shared() {
-        let storage1 = storage();
-        let storage2 = storage();
-        assert!(std::ptr::eq(storage1, storage2), "Storage should be shared");
+        let store = Store::new(Options::new().with_package_path(&package_root));
+        let spec: PackageSpec = "@preview/demo:0.1.0".parse().unwrap();
+
+        assert_eq!(store.prepare(&spec).unwrap(), package_dir);
     }
 }

@@ -30,7 +30,8 @@ use typst::foundations::Dict;
 
 use crate::codegen::json_to_simple_value;
 use crate::diagnostic::CompileError;
-use crate::resource::file::SharedFileCache;
+use crate::resource::file::{FileResolver, SharedFileCache};
+use crate::resource::font::FontStore;
 use crate::world::{SnapshotConfig, SourceSnapshot, TypstWorld};
 
 use super::compile::{compile_with_world, CompileResult};
@@ -45,11 +46,13 @@ use super::scan::{scan_impl, ScanResult};
 /// When used together, Eval cache from scan is reused during compile.
 pub struct Batcher<'a> {
     root: &'a Path,
+    pub(crate) files: Arc<FileResolver>,
+    pub(crate) font_store: Arc<FontStore>,
     inputs: Option<Dict>,
     pub(crate) preludes: Vec<String>,
     pub(crate) postludes: Vec<String>,
     snapshot: Option<Arc<SourceSnapshot>>,
-    fallback_cache: Arc<SharedFileCache>,
+    pub(crate) fallback_cache: Arc<SharedFileCache>,
 }
 
 impl<'a> WithInputs for Batcher<'a> {
@@ -63,6 +66,8 @@ impl<'a> Batcher<'a> {
     pub fn new(root: &'a Path) -> Self {
         Self {
             root,
+            files: Arc::new(FileResolver::new()),
+            font_store: Arc::new(FontStore::new()),
             inputs: None,
             preludes: Vec::new(),
             postludes: Vec::new(),
@@ -77,6 +82,24 @@ impl<'a> Batcher<'a> {
     /// Uses no fonts and is optimized for query/validate scenarios.
     pub fn for_scan(root: &'a Path) -> BatchScanner<'a> {
         BatchScanner::new(root)
+    }
+
+    /// Use an explicit file resolver for this batcher.
+    pub fn with_files(mut self, files: FileResolver) -> Self {
+        self.files = Arc::new(files);
+        self
+    }
+
+    /// Use an explicit fallback cache for files outside the snapshot.
+    pub fn with_file_cache(mut self, cache: Arc<SharedFileCache>) -> Self {
+        self.fallback_cache = cache;
+        self
+    }
+
+    /// Use an explicit font store.
+    pub fn with_font_store(mut self, fonts: Arc<FontStore>) -> Self {
+        self.font_store = fonts;
+        self
     }
 
     /// Add prelude code to inject at the beginning of each main file.
@@ -128,7 +151,13 @@ impl<'a> Batcher<'a> {
             postlude: self.build_postlude_opt(),
         };
 
-        let snapshot = Arc::new(SourceSnapshot::build_with_config(&path_bufs, self.root, &config, on_each)?);
+        let snapshot = Arc::new(SourceSnapshot::build_with_config_and_files(
+            &path_bufs,
+            self.root,
+            Arc::clone(&self.files),
+            &config,
+            on_each,
+        )?);
         self.snapshot = Some(snapshot);
         self.fallback_cache = Arc::new(SharedFileCache::new());
 
@@ -309,8 +338,9 @@ impl<'a> Batcher<'a> {
 
     fn build_world(&self, path: &Path, snapshot: &Arc<SourceSnapshot>) -> TypstWorld {
         let mut builder = TypstWorld::builder(path, self.root)
+            .with_files(Arc::clone(&self.files))
             .with_snapshot_and_fallback(snapshot.clone(), Arc::clone(&self.fallback_cache))
-            .with_fonts();
+            .with_fonts(Arc::clone(&self.font_store));
 
         if let Some(inputs) = &self.inputs {
             builder = builder.with_inputs_dict(inputs.clone());
@@ -354,7 +384,13 @@ impl<'a> Batcher<'a> {
                     prelude: self.build_prelude_opt(),
                     postlude: self.build_postlude_opt(),
                 };
-                Ok(Arc::new(SourceSnapshot::build_with_config(&path_bufs, self.root, &config, |_| {})?))
+                Ok(Arc::new(SourceSnapshot::build_with_config_and_files(
+                    &path_bufs,
+                    self.root,
+                    Arc::clone(&self.files),
+                    &config,
+                    |_| {},
+                )?))
             }
         }
     }
@@ -379,8 +415,9 @@ impl<'a> Batcher<'a> {
 
         // Pass prelude for line offset calculation in diagnostics
         let mut builder = TypstWorld::builder(path, self.root)
+            .with_files(Arc::clone(&self.files))
             .with_snapshot_and_fallback(snapshot.clone(), Arc::clone(&self.fallback_cache))
-            .with_fonts()
+            .with_fonts(Arc::clone(&self.font_store))
             .with_inputs_dict(merged);
 
         if let Some(prelude) = self.build_prelude_opt() {
@@ -399,6 +436,7 @@ impl<'a> Batcher<'a> {
 /// Does not expose `batch_compile()` - use [`Batcher`] if you need compilation.
 pub struct BatchScanner<'a> {
     root: &'a Path,
+    files: Arc<FileResolver>,
     inputs: Option<Dict>,
     snapshot: Option<Arc<SourceSnapshot>>,
     fallback_cache: Arc<SharedFileCache>,
@@ -416,6 +454,7 @@ impl<'a> BatchScanner<'a> {
     pub fn new(root: &'a Path) -> Self {
         Self {
             root,
+            files: Arc::new(FileResolver::new()),
             inputs: None,
             snapshot: None,
             fallback_cache: Arc::new(SharedFileCache::new()),
@@ -426,6 +465,12 @@ impl<'a> BatchScanner<'a> {
     /// Add prelude code to inject at the beginning of each main file.
     pub fn with_prelude(mut self, prelude: impl Into<String>) -> Self {
         self.prelude = Some(prelude.into());
+        self
+    }
+
+    /// Use an explicit file resolver for this batch scanner.
+    pub fn with_files(mut self, files: FileResolver) -> Self {
+        self.files = Arc::new(files);
         self
     }
 
@@ -440,7 +485,13 @@ impl<'a> BatchScanner<'a> {
             prelude: self.prelude.clone(),
             postlude: None,
         };
-        let snapshot = Arc::new(SourceSnapshot::build_with_config(&path_bufs, self.root, &config, |_| {})?);
+        let snapshot = Arc::new(SourceSnapshot::build_with_config_and_files(
+            &path_bufs,
+            self.root,
+            Arc::clone(&self.files),
+            &config,
+            |_| {},
+        )?);
         self.snapshot = Some(snapshot);
         self.fallback_cache = Arc::new(SharedFileCache::new());
 
@@ -469,7 +520,13 @@ impl<'a> BatchScanner<'a> {
                     prelude: self.prelude.clone(),
                     postlude: None,
                 };
-                Arc::new(SourceSnapshot::build_with_config(&path_bufs, self.root, &config, |_| {})?)
+                Arc::new(SourceSnapshot::build_with_config_and_files(
+                    &path_bufs,
+                    self.root,
+                    Arc::clone(&self.files),
+                    &config,
+                    |_| {},
+                )?)
             }
         };
 
@@ -488,6 +545,7 @@ impl<'a> BatchScanner<'a> {
 
     fn build_world(&self, path: &Path, snapshot: &Arc<SourceSnapshot>) -> TypstWorld {
         let mut builder = TypstWorld::builder(path, self.root)
+            .with_files(Arc::clone(&self.files))
             .with_snapshot_and_fallback(snapshot.clone(), Arc::clone(&self.fallback_cache))
             .no_fonts();
 

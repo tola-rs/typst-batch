@@ -6,19 +6,14 @@ pub mod library;
 pub mod package;
 
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-/// Initialize all global resources at startup.
-pub fn warmup(font_dirs: &[&Path]) {
-    // Initialize fonts
-    font::get_fonts(font_dirs);
-
+/// Initialize immutable shared resources and return a warmed font store.
+pub fn warmup(font_dirs: &[&Path]) -> Arc<font::FontStore> {
     // Initialize library
     LazyLock::force(&library::GLOBAL_LIBRARY);
 
-    // Initialize package storage
-    package::storage();
-
-    // Initialize file cache
-    LazyLock::force(&file::GLOBAL_FILE_CACHE);
+    let fonts = Arc::new(font::FontStore::with_paths(font_dirs));
+    fonts.get();
+    fonts
 }

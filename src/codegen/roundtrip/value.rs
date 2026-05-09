@@ -91,6 +91,9 @@ fn content_in_sys_inputs() {
     use typst::text::TextElem;
     use typst::foundations::Content;
 
+    use std::sync::Arc;
+
+    use crate::resource::font::FontStore;
     use crate::world::TypstWorld;
     use crate::process::compile::compile_with_world;
 
@@ -115,7 +118,7 @@ fn content_in_sys_inputs() {
     // Build world with custom inputs
     let world = TypstWorld::builder(&file, dir.path())
         .with_local_cache()
-        .with_fonts()
+        .with_fonts(Arc::new(FontStore::new()))
         .with_inputs_dict(inputs)
         .build();
 
@@ -142,11 +145,13 @@ fn content_in_sys_inputs() {
 #[test]
 fn json_to_content_then_inject() {
     use std::fs;
+    use std::sync::Arc;
     use tempfile::TempDir;
     use serde_json::json;
     use typst::foundations::{Dict, IntoValue};
 
     use crate::codegen::json_to_content;
+    use crate::resource::font::FontStore;
     use crate::world::TypstWorld;
     use crate::process::compile::compile_with_world;
 
@@ -212,7 +217,7 @@ fn json_to_content_then_inject() {
     // Build world with inputs and compile
     let world = TypstWorld::builder(&real_file, dir.path())
         .with_local_cache()
-        .with_fonts()
+        .with_fonts(Arc::new(FontStore::new()))
         .with_inputs_dict(inputs)
         .build();
 

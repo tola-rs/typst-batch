@@ -37,6 +37,7 @@
 //! ```
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use typst::foundations::Dict;
 
@@ -46,7 +47,8 @@ use crate::world::TypstWorld;
 
 use super::inputs::WithInputs;
 use super::session::{AccessedDeps, CompileSession};
-use crate::resource::file::PackageId;
+use crate::resource::file::{FileResolver, PackageId, SharedFileCache};
+use crate::resource::font::FontStore;
 
 /// Type alias for custom World builder function.
 type WorldBuilderFn<'a> = Box<dyn FnOnce(MainPath<'_>, RootPath<'_>) -> TypstWorld + 'a>;
@@ -117,6 +119,9 @@ impl AsRef<Path> for RootPath<'_> {
 /// ```
 pub struct Compiler<'a> {
     root: &'a Path,
+    files: Arc<FileResolver>,
+    file_cache: Arc<SharedFileCache>,
+    font_store: Arc<FontStore>,
     inputs: Option<Dict>,
     preludes: Vec<String>,
     postludes: Vec<String>,
@@ -133,10 +138,31 @@ impl<'a> Compiler<'a> {
     pub fn new(root: &'a Path) -> Self {
         Self {
             root,
+            files: Arc::new(FileResolver::new()),
+            file_cache: Arc::new(SharedFileCache::new()),
+            font_store: Arc::new(FontStore::new()),
             inputs: None,
             preludes: Vec::new(),
             postludes: Vec::new(),
         }
+    }
+
+    /// Use an explicit file resolver for compilations created by this compiler.
+    pub fn with_files(mut self, files: FileResolver) -> Self {
+        self.files = Arc::new(files);
+        self
+    }
+
+    /// Use an explicit shared file cache.
+    pub fn with_file_cache(mut self, cache: Arc<SharedFileCache>) -> Self {
+        self.file_cache = cache;
+        self
+    }
+
+    /// Use an explicit font store.
+    pub fn with_font_store(mut self, fonts: Arc<FontStore>) -> Self {
+        self.font_store = fonts;
+        self
     }
 
     /// Add prelude code to inject at the beginning of the main file.
@@ -156,6 +182,9 @@ impl<'a> Compiler<'a> {
         SingleCompiler {
             root: self.root,
             path: path.as_ref().to_path_buf(),
+            files: self.files,
+            file_cache: self.file_cache,
+            font_store: self.font_store,
             inputs: self.inputs,
             preludes: self.preludes,
             postludes: self.postludes,
@@ -173,6 +202,9 @@ impl<'a> Compiler<'a> {
     #[cfg(feature = "batch")]
     pub fn into_batch(self) -> super::batch::Batcher<'a> {
         let mut batcher = super::batch::Batcher::new(self.root);
+        batcher.files = self.files;
+        batcher.fallback_cache = self.file_cache;
+        batcher.font_store = self.font_store;
         if let Some(inputs) = self.inputs {
             batcher = batcher.with_inputs_dict(inputs);
         }
@@ -207,6 +239,9 @@ impl<'a> Compiler<'a> {
 pub struct SingleCompiler<'a> {
     root: &'a Path,
     path: PathBuf,
+    files: Arc<FileResolver>,
+    file_cache: Arc<SharedFileCache>,
+    font_store: Arc<FontStore>,
     inputs: Option<Dict>,
     preludes: Vec<String>,
     postludes: Vec<String>,
@@ -269,8 +304,9 @@ impl<'a> SingleCompiler<'a> {
 
     fn default_world(&self) -> TypstWorld {
         let mut builder = TypstWorld::builder(&self.path, self.root)
-            .with_shared_cache()
-            .with_fonts();
+            .with_files(Arc::clone(&self.files))
+            .with_shared_cache(Arc::clone(&self.file_cache))
+            .with_fonts(Arc::clone(&self.font_store));
 
         if let Some(inputs) = &self.inputs {
             builder = builder.with_inputs_dict(inputs.clone());
@@ -372,7 +408,7 @@ pub(crate) fn compile_with_world(world: &TypstWorld) -> Result<CompileResult, Co
 
     let document = HtmlDocument::new(document);
 
-    let accessed = session.finish(world.root());
+    let accessed = session.finish(world.root(), world.files());
     let filtered_warnings = filter_html_warnings(&result.warnings);
     let diagnostics = Diagnostics::resolve_with_offset(world, &filtered_warnings, line_offset);
 
@@ -386,8 +422,22 @@ pub(crate) fn compile_with_world(world: &TypstWorld) -> Result<CompileResult, Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource::file::{FileResolver, PackageId, VirtualFileSystem};
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    struct ProbeVfs(&'static str);
+
+    impl VirtualFileSystem for ProbeVfs {
+        fn read(&self, path: &Path) -> Option<Vec<u8>> {
+            (path == Path::new("/probe.txt")).then(|| self.0.as_bytes().to_vec())
+        }
+
+        fn read_package(&self, _pkg: &PackageId, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
 
     #[test]
     fn test_simple_compile() {
@@ -421,6 +471,67 @@ mod tests {
         assert!(result.is_ok());
         let html = result.unwrap().html().unwrap();
         assert!(String::from_utf8_lossy(&html).contains("Custom Title"));
+    }
+
+    #[test]
+    fn compiler_uses_its_own_file_resolver() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.typ");
+        fs::write(&file, r#"#read("/probe.txt")"#).unwrap();
+
+        let first_files = FileResolver::new().with_virtual_fs(ProbeVfs("first"));
+        let second_files = FileResolver::new().with_virtual_fs(ProbeVfs("second"));
+
+        let first = Compiler::new(dir.path())
+            .with_files(first_files)
+            .with_path(&file)
+            .compile()
+            .unwrap()
+            .html()
+            .unwrap();
+        let second = Compiler::new(dir.path())
+            .with_files(second_files)
+            .with_path(&file)
+            .compile()
+            .unwrap()
+            .html()
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&first).contains("first"));
+        assert!(String::from_utf8_lossy(&second).contains("second"));
+    }
+
+    #[test]
+    #[cfg(feature = "batch")]
+    fn batcher_uses_its_own_file_resolver() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.typ");
+        fs::write(&file, r#"#read("/probe.txt")"#).unwrap();
+
+        let first_files = FileResolver::new().with_virtual_fs(ProbeVfs("first"));
+        let second_files = FileResolver::new().with_virtual_fs(ProbeVfs("second"));
+
+        let first = Compiler::new(dir.path())
+            .with_files(first_files)
+            .into_batch()
+            .batch_compile(&[&file])
+            .unwrap()
+            .remove(0)
+            .unwrap()
+            .html()
+            .unwrap();
+        let second = Compiler::new(dir.path())
+            .with_files(second_files)
+            .into_batch()
+            .batch_compile(&[&file])
+            .unwrap()
+            .remove(0)
+            .unwrap()
+            .html()
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&first).contains("first"));
+        assert!(String::from_utf8_lossy(&second).contains("second"));
     }
 
     #[test]

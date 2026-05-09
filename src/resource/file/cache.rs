@@ -3,18 +3,16 @@
 //! # Caching Strategy
 //!
 //! ```text
-//! GLOBAL_FILE_CACHE (shared across all compilations)
-//! └── SharedFileCache
-//!     └── FxHashMap<FileId, Arc<Mutex<FileSlot>>>
-//!         └── FileSlot
-//!             ├── source: SlotCell<Source>  ─┐
-//!             └── file: SlotCell<Bytes>     ─┼── Fingerprint-based invalidation
+//! SharedFileCache
+//! └── FxHashMap<FileId, Arc<Mutex<FileSlot>>>
+//!     └── FileSlot
+//!         ├── source: SlotCell<Source>  ─┐
+//!         └── file: SlotCell<Bytes>     ─┼── Fingerprint-based invalidation
 //! ```
 
 use std::sync::Arc;
 use std::mem;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashMap;
@@ -23,13 +21,8 @@ use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source};
 
 use super::access::{current_generation, record_file_access};
-use super::read::{decode_utf8, read_with_global_virtual};
-use super::vfs::VirtualFileSystem;
-use crate::resource::file::read::read_with_virtual;
-
-// =============================================================================
-// Global File Cache
-// =============================================================================
+use super::read::decode_utf8;
+use super::FileResolver;
 
 /// Shared cache keyed by `FileId`.
 ///
@@ -49,16 +42,27 @@ impl SharedFileCache {
     /// Clear all cached slots.
     pub fn clear(&self) {
         self.slots.write().clear();
+        typst::comemo::evict(0);
     }
 
-    /// Read and cache source text using the global virtual file system.
-    pub fn source_with_global_virtual(&self, id: FileId, root: &Path) -> FileResult<Source> {
-        self.slot(id).lock().source_with_global_virtual(root)
+    /// Read and cache source text using an explicit file resolver.
+    pub fn source_with_files(
+        &self,
+        id: FileId,
+        root: &Path,
+        files: &FileResolver,
+    ) -> FileResult<Source> {
+        self.slot(id).lock().source_with_files(root, files)
     }
 
-    /// Read and cache raw bytes using the global virtual file system.
-    pub fn file_with_global_virtual(&self, id: FileId, root: &Path) -> FileResult<Bytes> {
-        self.slot(id).lock().file_with_global_virtual(root)
+    /// Read and cache raw bytes using an explicit file resolver.
+    pub fn file_with_files(
+        &self,
+        id: FileId,
+        root: &Path,
+        files: &FileResolver,
+    ) -> FileResult<Bytes> {
+        self.slot(id).lock().file_with_files(root, files)
     }
 
     fn slot(&self, id: FileId) -> Arc<Mutex<FileSlot>> {
@@ -73,27 +77,6 @@ impl SharedFileCache {
                 .or_insert_with(|| Arc::new(Mutex::new(FileSlot::new(id)))),
         )
     }
-}
-
-/// Global shared file cache - reused across all compilations.
-///
-/// # Design Notes
-///
-/// The cache key is `FileId` (which contains only `VirtualPath`, not the root).
-/// This is intentional - the cache is designed for reuse within the **same project**.
-///
-/// For correct cross-project usage:
-/// - Call `reset_access_flags()` before each compilation
-/// - Call `clear_file_cache()` when switching between different projects
-pub static GLOBAL_FILE_CACHE: LazyLock<SharedFileCache> = LazyLock::new(SharedFileCache::new);
-
-/// Clear the global file cache.
-///
-/// Call when template/dependency files change to ensure fresh data is loaded.
-/// This also clears the comemo cache.
-pub fn clear_file_cache() {
-    GLOBAL_FILE_CACHE.clear();
-    typst::comemo::evict(0);
 }
 
 // =============================================================================
@@ -194,38 +177,15 @@ impl FileSlot {
         }
     }
 
-    /// Retrieve parsed source for this file (no virtual data).
-    pub fn source(&mut self, project_root: &Path) -> FileResult<Source> {
-        self.source_with_virtual(project_root, &super::vfs::NoVirtualFS)
-    }
-
-    /// Retrieve parsed source using the global virtual file system.
-    pub fn source_with_global_virtual(&mut self, project_root: &Path) -> FileResult<Source> {
-        record_file_access(self.id);
-        self.source.get_or_init(
-            || read_with_global_virtual(self.id, project_root),
-            |data, prev| {
-                let text = decode_utf8(&data)?;
-                match prev {
-                    Some(mut src) => {
-                        src.replace(text);
-                        Ok(src)
-                    }
-                    None => Ok(Source::new(self.id, text.into())),
-                }
-            },
-        )
-    }
-
-    /// Retrieve parsed source with virtual file system support.
-    pub fn source_with_virtual<V: VirtualFileSystem>(
+    /// Retrieve parsed source using an explicit file resolver.
+    pub fn source_with_files(
         &mut self,
         project_root: &Path,
-        virtual_fs: &V,
+        files: &FileResolver,
     ) -> FileResult<Source> {
         record_file_access(self.id);
         self.source.get_or_init(
-            || read_with_virtual(self.id, project_root, virtual_fs),
+            || files.read(self.id, project_root),
             |data, prev| {
                 let text = decode_utf8(&data)?;
                 match prev {
@@ -239,32 +199,17 @@ impl FileSlot {
         )
     }
 
-    /// Retrieve raw bytes for this file (no virtual data).
-    pub fn file(&mut self, project_root: &Path) -> FileResult<Bytes> {
-        self.file_with_virtual(project_root, &super::vfs::NoVirtualFS)
-    }
-
-    /// Retrieve raw bytes using the global virtual file system.
-    pub fn file_with_global_virtual(&mut self, project_root: &Path) -> FileResult<Bytes> {
-        record_file_access(self.id);
-        self.file.get_or_init(
-            || read_with_global_virtual(self.id, project_root),
-            |data, _| Ok(Bytes::new(data)),
-        )
-    }
-
-    /// Retrieve raw bytes with virtual file system support.
-    pub fn file_with_virtual<V: VirtualFileSystem>(
+    /// Retrieve raw bytes using an explicit file resolver.
+    pub fn file_with_files(
         &mut self,
         project_root: &Path,
-        virtual_fs: &V,
+        files: &FileResolver,
     ) -> FileResult<Bytes> {
         record_file_access(self.id);
-        self.file.get_or_init(
-            || read_with_virtual(self.id, project_root, virtual_fs),
-            |data, _| Ok(Bytes::new(data)),
-        )
+        self.file
+            .get_or_init(|| files.read(self.id, project_root), |data, _| Ok(Bytes::new(data)))
     }
+
 }
 
 // =============================================================================
@@ -317,8 +262,9 @@ mod tests {
         let id = FileId::new(None, vpath);
         let mut slot = FileSlot::new(id);
 
-        let result1 = slot.file(dir.path());
-        let result2 = slot.file(dir.path());
+        let files = FileResolver::new();
+        let result1 = slot.file_with_files(dir.path(), &files);
+        let result2 = slot.file_with_files(dir.path(), &files);
 
         assert!(result1.is_ok());
         assert_eq!(result1.unwrap(), result2.unwrap());

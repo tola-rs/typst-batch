@@ -1,19 +1,7 @@
-//! Global shared font management.
+//! Font loading and caching.
 //!
-//! Fonts are expensive to load (~100ms+), so we load them once at startup
-//! and share across all compilations via `OnceLock`.
-//!
-//! # Design Rationale
-//!
-//! Font loading involves:
-//! 1. Scanning system font directories (platform-specific)
-//! 2. Parsing font metadata (family, weight, style, etc.)
-//! 3. Building a searchable font book index
-//!
-//! This is done once and shared via `OnceLock` to ensure:
-//! - Single initialization (first caller wins)
-//! - Zero-cost subsequent access (just a pointer dereference)
-//! - Thread-safe sharing across compilations
+//! Fonts are expensive to load, so callers should share a `FontStore` across
+//! compilations that use the same font configuration.
 //!
 //! # Font Sources
 //!
@@ -29,25 +17,18 @@ use typst::text::FontBook;
 use typst::utils::LazyHash;
 use typst_kit::fonts::Fonts;
 
-/// Global shared fonts - initialized once with custom font paths.
-///
-/// Uses `OnceLock` for thread-safe, one-time initialization.
-/// The first call to `get_fonts` determines the font paths for all
-/// subsequent compilations.
-static GLOBAL_FONTS: OnceLock<(Fonts, LazyHash<FontBook>)> = OnceLock::new();
-
 // =============================================================================
 // Font Configuration
 // =============================================================================
 
 /// Options for font initialization.
 ///
-/// Use this to customize font loading behavior when calling [`init_fonts_with_options`].
+/// Use this to customize font loading behavior for a [`FontStore`].
 ///
 /// # Example
 ///
 /// ```ignore
-/// use typst_batch::{FontOptions, init_fonts_with_options};
+/// use typst_batch::{FontOptions, FontStore};
 /// use std::path::Path;
 ///
 /// let options = FontOptions::new()
@@ -58,7 +39,7 @@ static GLOBAL_FONTS: OnceLock<(Fonts, LazyHash<FontBook>)> = OnceLock::new();
 ///         Path::new("content/fonts"),
 ///     ]);
 ///
-/// init_fonts_with_options(&options);
+/// let fonts = FontStore::with_options(options);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct FontOptions {
@@ -198,31 +179,7 @@ pub fn debug_dump_fonts(fonts: &Fonts) {
 // Font Initialization
 // =============================================================================
 
-/// Initialize fonts with custom font paths.
-///
-/// # Arguments
-///
-/// * `font_paths` - Directories to search for fonts (e.g., `[assets/, content/]`).
-///   **Important**: Should NOT include output directory (e.g., `public/`) to avoid
-///   loading duplicate fonts that cause non-deterministic behavior.
-///
-/// # Returns
-///
-/// A tuple of:
-/// - `Fonts`: The font collection with lazy-loaded font data
-/// - `LazyHash<FontBook>`: The font book index wrapped for comemo caching
-fn init_fonts(font_paths: &[&Path]) -> (Fonts, LazyHash<FontBook>) {
-    let options = FontOptions {
-        include_system_fonts: true,
-        include_embedded_fonts: true,
-        custom_paths: font_paths.iter().map(|p| p.to_path_buf()).collect(),
-    };
-    init_fonts_impl(&options)
-}
-
 /// Initialize fonts with detailed options.
-///
-/// This is the implementation used by both [`init_fonts`] and [`init_fonts_with_options`].
 fn init_fonts_impl(options: &FontOptions) -> (Fonts, LazyHash<FontBook>) {
     let mut searcher = Fonts::searcher();
     // Include system fonts if enabled
@@ -245,49 +202,56 @@ fn init_fonts_impl(options: &FontOptions) -> (Fonts, LazyHash<FontBook>) {
     (fonts, book)
 }
 
-/// Initialize fonts with detailed options.
-///
-/// Use this for more control over font loading. Unlike [`get_fonts`], this
-/// allows you to:
-/// - Disable system font loading
-/// - Specify exact font paths
-///
-/// # Arguments
-///
-/// * `options` - Font initialization options
-///
-/// # Returns
-///
-/// A static reference to the shared font collection and book.
-///
-/// # Note
-///
-/// Like [`get_fonts`], this function only initializes fonts once. Subsequent
-/// calls return the already-initialized fonts, ignoring the options parameter.
-pub fn init_fonts_with_options(options: &FontOptions) -> &'static (Fonts, LazyHash<FontBook>) {
-    GLOBAL_FONTS.get_or_init(|| init_fonts_impl(options))
+/// Lazily loaded fonts for one explicit font configuration.
+pub struct FontStore {
+    options: FontOptions,
+    fonts: OnceLock<(Fonts, LazyHash<FontBook>)>,
 }
 
-/// Check if fonts have been initialized.
-///
-/// Returns `true` if fonts have already been loaded via [`get_fonts`] or
-/// [`init_fonts_with_options`].
-pub fn fonts_initialized() -> bool {
-    GLOBAL_FONTS.get().is_some()
+impl FontStore {
+    /// Create a font store with default options.
+    pub fn new() -> Self {
+        Self::with_options(FontOptions::new())
+    }
+
+    /// Create a font store with custom options.
+    pub fn with_options(options: FontOptions) -> Self {
+        Self {
+            options,
+            fonts: OnceLock::new(),
+        }
+    }
+
+    /// Create a font store with custom font directories.
+    pub fn with_paths(paths: &[&Path]) -> Self {
+        Self::with_options(FontOptions::new().with_custom_paths(paths))
+    }
+
+    /// Get the loaded fonts, initializing them on first use.
+    pub fn get(&self) -> &(Fonts, LazyHash<FontBook>) {
+        self.fonts.get_or_init(|| init_fonts_impl(&self.options))
+    }
+
+    /// Check if this store has loaded its fonts.
+    pub fn is_loaded(&self) -> bool {
+        self.fonts.get().is_some()
+    }
+
+    /// Get the number of loaded fonts.
+    pub fn font_count(&self) -> Option<usize> {
+        self.fonts.get().map(|(fonts, _)| fonts.fonts.len())
+    }
+
+    /// Get the number of font families.
+    pub fn family_count(&self) -> Option<usize> {
+        self.fonts.get().map(|(_, book)| book.families().count())
+    }
 }
 
-/// Get the number of loaded fonts.
-///
-/// Returns `None` if fonts have not been initialized yet.
-pub fn font_count() -> Option<usize> {
-    GLOBAL_FONTS.get().map(|(fonts, _)| fonts.fonts.len())
-}
-
-/// Get the number of font families.
-///
-/// Returns `None` if fonts have not been initialized yet.
-pub fn font_family_count() -> Option<usize> {
-    GLOBAL_FONTS.get().map(|(_, book)| book.families().count())
+impl Default for FontStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // =============================================================================
@@ -359,45 +323,23 @@ fn sort_fonts_deterministically(fonts: Fonts) -> Fonts {
     }
 }
 
-/// Get or initialize global fonts.
-///
-/// The first call determines the font paths used for all subsequent compilations.
-/// This is intentional: fonts rarely change during a program's lifetime, and
-/// sharing them saves ~100ms per compilation.
-///
-/// # Arguments
-///
-/// * `font_dirs` - Directories to search for fonts (e.g., `[assets/, content/]`).
-///   Pass on the first call to include fonts from these directories.
-///   Should NOT include output directory (e.g., `public/`) to avoid duplicates.
-///
-/// # Returns
-///
-/// A static reference to the shared font collection and book.
-///
-/// # Thread Safety
-///
-/// This function is thread-safe. If called concurrently, only one thread
-/// performs initialization; others wait and receive the shared result.
-pub fn get_fonts(font_dirs: &[&Path]) -> &'static (Fonts, LazyHash<FontBook>) {
-    GLOBAL_FONTS.get_or_init(|| init_fonts(font_dirs))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_global_fonts_initialized() {
-        let fonts = get_fonts(&[]);
+    fn font_store_loads_fonts() {
+        let store = FontStore::new();
+        let fonts = store.get();
         // Should find at least some system fonts on most systems
         // Note: This test may fail in minimal container environments
         assert!(!fonts.0.fonts.is_empty(), "Should find system fonts");
     }
 
     #[test]
-    fn test_font_book_not_empty() {
-        let fonts = get_fonts(&[]);
+    fn font_store_has_font_book() {
+        let store = FontStore::new();
+        let fonts = store.get();
         // FontBook should have indexed the fonts
         assert!(
             fonts.1.families().count() > 0,
@@ -406,22 +348,21 @@ mod tests {
     }
 
     #[test]
-    fn test_fonts_are_shared() {
-        let fonts1 = get_fonts(&[]);
-        let fonts2 = get_fonts(&[]);
-        // Should return the same static reference
+    fn font_store_reuses_loaded_fonts() {
+        let store = FontStore::new();
+        let fonts1 = store.get();
+        let fonts2 = store.get();
         assert!(std::ptr::eq(fonts1, fonts2), "Fonts should be shared");
     }
 
     #[test]
-    fn test_subsequent_calls_ignore_path() {
-        // First call initializes (may have been done by other tests)
-        let fonts1 = get_fonts(&[]);
-        // Second call with different path should return same fonts
-        let fonts2 = get_fonts(&[Path::new("/nonexistent")]);
-        assert!(
-            std::ptr::eq(fonts1, fonts2),
-            "Path ignored after initialization"
-        );
+    fn stores_keep_independent_configurations() {
+        let first = FontStore::with_paths(&[]);
+        let second = FontStore::with_paths(&[Path::new("/nonexistent")]);
+
+        let first_fonts = first.get();
+        let second_fonts = second.get();
+
+        assert!(!std::ptr::eq(first_fonts, second_fonts));
     }
 }

@@ -8,14 +8,15 @@ use typst::Library;
 use super::cache::LocalFileCache;
 use super::snapshot::SourceSnapshot;
 use crate::resource::file::SharedFileCache;
+use crate::resource::font::FontStore;
 use crate::resource::library::create_library_with_inputs;
 
 /// File access mode.
 pub(crate) enum FileCacheMode {
     /// Task-local cache, no sharing between tasks.
     Local(LocalFileCache),
-    /// Global shared cache.
-    Shared,
+    /// Shared cache owned by the caller.
+    Shared(Arc<SharedFileCache>),
     /// Pre-built source snapshot plus a shared fallback cache.
     Snapshot {
         /// Immutable snapshot containing preloaded project sources.
@@ -31,9 +32,9 @@ impl FileCacheMode {
         Self::Local(LocalFileCache::new())
     }
 
-    /// Creates a shared cache mode using the global cache.
-    pub fn shared() -> Self {
-        Self::Shared
+    /// Creates a shared cache mode.
+    pub fn shared(cache: Arc<SharedFileCache>) -> Self {
+        Self::Shared(cache)
     }
 
     /// Creates a snapshot cache mode from a pre-built source snapshot.
@@ -57,12 +58,12 @@ impl FileCacheMode {
 }
 
 /// Font loading mode.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum FontMode {
     /// No fonts loaded (for scan/query).
     None,
-    /// Shared fonts from global cache.
-    Shared,
+    /// Shared fonts owned by the caller.
+    Shared(Arc<FontStore>),
 }
 
 /// Library mode for `sys.inputs`.

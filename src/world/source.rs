@@ -6,11 +6,11 @@ use std::path::Path;
 use typst::diag::FileResult;
 use typst::syntax::{FileId, Source};
 
-use crate::resource::file::{decode_utf8, read_with_global_virtual};
+use crate::resource::file::{decode_utf8, FileResolver};
 
 /// Read a source file without injecting prelude/postlude.
-pub(crate) fn read_source(id: FileId, root: &Path) -> FileResult<Source> {
-    let bytes = read_with_global_virtual(id, root)?;
+pub(crate) fn read_source(id: FileId, root: &Path, files: &FileResolver) -> FileResult<Source> {
+    let bytes = files.read(id, root)?;
     let text = decode_utf8(&bytes)?;
     Ok(build_source(id, text, false, None, None))
 }
@@ -19,11 +19,12 @@ pub(crate) fn read_source(id: FileId, root: &Path) -> FileResult<Source> {
 pub(crate) fn read_source_with_injection(
     id: FileId,
     root: &Path,
+    files: &FileResolver,
     is_main: bool,
     prelude: Option<&str>,
     postlude: Option<&str>,
 ) -> FileResult<Source> {
-    let bytes = read_with_global_virtual(id, root)?;
+    let bytes = files.read(id, root)?;
     let text = decode_utf8(&bytes)?;
     Ok(build_source(id, text, is_main, prelude, postlude))
 }

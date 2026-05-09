@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::resource::file::PackageId;
+use crate::resource::file::{FileResolver, PackageId};
 
 use super::common::{collect_accessed_files, collect_accessed_packages, reset_tracking};
 
@@ -17,7 +17,7 @@ use super::common::{collect_accessed_files, collect_accessed_packages, reset_tra
 /// ```ignore
 /// let session = CompileSession::start();
 /// let result = typst::compile(world);
-/// let deps = session.finish(world.root());
+/// let deps = session.finish(world.root(), world.files());
 /// // deps.files and deps.packages now available
 /// ```
 pub struct CompileSession {
@@ -34,9 +34,9 @@ impl CompileSession {
 
     /// Finish the session and collect accessed files/packages.
     #[inline]
-    pub fn finish(self, root: &Path) -> AccessedDeps {
+    pub fn finish(self, root: &Path, files: &FileResolver) -> AccessedDeps {
         AccessedDeps {
-            files: collect_accessed_files(root),
+            files: collect_accessed_files(root, files),
             packages: collect_accessed_packages(),
         }
     }

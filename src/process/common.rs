@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashSet;
 
-use crate::resource::file::{get_accessed_files, is_virtual_path, reset_access_flags, PackageId};
+use crate::resource::file::{get_accessed_files, reset_access_flags, FileResolver, PackageId};
 
 /// Reset file access tracking before compilation/scanning.
 #[inline]
@@ -16,14 +16,14 @@ pub fn reset_tracking() {
 ///
 /// Returns paths relative to root, including virtual paths.
 /// Note: Package files are excluded; use `collect_accessed_packages()` for those.
-pub fn collect_accessed_files(root: &Path) -> Vec<PathBuf> {
+pub fn collect_accessed_files(root: &Path, files: &FileResolver) -> Vec<PathBuf> {
     get_accessed_files()
         .into_iter()
         .filter(|id| id.package().is_none())
         .filter_map(|id| {
             id.vpath().resolve(root).or_else(|| {
                 let vpath = id.vpath().as_rooted_path();
-                if is_virtual_path(vpath) {
+                if files.is_virtual_path(vpath) {
                     Some(vpath.to_path_buf())
                 } else {
                     None

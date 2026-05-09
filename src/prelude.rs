@@ -29,13 +29,13 @@ pub use crate::diagnostic::{
 
 // VFS & VPS
 pub use crate::resource::file::{
-    clear_file_cache, file_id, file_id_from_path, get_accessed_files, is_virtual_path,
-    reset_access_flags, set_virtual_fs, virtual_file_id, MapVirtualFS, NoVirtualFS, PackageId,
-    PackageVersion, VirtualFileSystem, GLOBAL_FILE_CACHE,
+    file_id, file_id_from_path, get_accessed_files, reset_access_flags, virtual_file_id,
+    FileResolver, MapVirtualFS, NoVirtualFS, PackageId, PackageVersion, SharedFileCache,
+    VirtualFileSystem,
 };
 
 // Fonts
-pub use crate::resource::font::{get_fonts, init_fonts_with_options, FontOptions};
+pub use crate::resource::font::{FontOptions, FontStore};
 
 // Library
 pub use crate::resource::library::{create_library_with_inputs, GLOBAL_LIBRARY};

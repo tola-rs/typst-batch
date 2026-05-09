@@ -8,7 +8,8 @@ use typst::foundations::Dict;
 use super::core::{Timestamp, TypstWorld};
 use super::snapshot::SourceSnapshot;
 use super::strategy::{FileCacheMode, FontMode, LibraryMode};
-use crate::resource::file::SharedFileCache;
+use crate::resource::file::{FileResolver, SharedFileCache};
+use crate::resource::font::FontStore;
 
 /// Builder for configuring `TypstWorld`.
 ///
@@ -16,6 +17,7 @@ use crate::resource::file::SharedFileCache;
 pub struct WorldBuilder {
     main_path: PathBuf,
     root: PathBuf,
+    files: Arc<FileResolver>,
     cache: Option<FileCacheMode>,
     fonts: Option<FontMode>,
     library: LibraryMode,
@@ -30,6 +32,7 @@ impl WorldBuilder {
         Self {
             main_path: main_path.to_path_buf(),
             root: root.to_path_buf(),
+            files: Arc::new(FileResolver::new()),
             cache: None,
             fonts: None,
             library: LibraryMode::Global,
@@ -43,6 +46,12 @@ impl WorldBuilder {
     // Cache Strategy
     // =========================================================================
 
+    /// Use an explicit file resolver for this world.
+    pub fn with_files(mut self, files: Arc<FileResolver>) -> Self {
+        self.files = files;
+        self
+    }
+
     /// Use task-local cache (no sharing between compilations).
     ///
     /// Best for: isolated compilations, scanning operations.
@@ -51,11 +60,11 @@ impl WorldBuilder {
         self
     }
 
-    /// Use global shared cache with lock-based synchronization.
+    /// Use shared cache with lock-based synchronization.
     ///
     /// Best for: hot reload, incremental updates where files change frequently.
-    pub fn with_shared_cache(mut self) -> Self {
-        self.cache = Some(FileCacheMode::shared());
+    pub fn with_shared_cache(mut self, cache: Arc<SharedFileCache>) -> Self {
+        self.cache = Some(FileCacheMode::shared(cache));
         self
     }
 
@@ -89,11 +98,11 @@ impl WorldBuilder {
         self
     }
 
-    /// Use shared font cache.
+    /// Use shared fonts.
     ///
     /// Best for: compilation operations that require layout/rendering.
-    pub fn with_fonts(mut self) -> Self {
-        self.fonts = Some(FontMode::Shared);
+    pub fn with_fonts(mut self, fonts: Arc<FontStore>) -> Self {
+        self.fonts = Some(FontMode::Shared(fonts));
         self
     }
 
@@ -188,6 +197,16 @@ impl WorldBuilder {
     pub fn build(self) -> TypstWorld {
         let cache = self.cache.expect("cache strategy must be set");
         let fonts = self.fonts.expect("fonts strategy must be set");
-        TypstWorld::new(&self.main_path, &self.root, cache, fonts, self.library, self.prelude, self.postlude, self.timestamp)
+        TypstWorld::new(
+            &self.main_path,
+            &self.root,
+            self.files,
+            cache,
+            fonts,
+            self.library,
+            self.prelude,
+            self.postlude,
+            self.timestamp,
+        )
     }
 }

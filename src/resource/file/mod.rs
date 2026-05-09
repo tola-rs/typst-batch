@@ -32,18 +32,19 @@
 //!
 //! # Caching
 //!
-//! Files are cached globally with fingerprint-based invalidation.
-//! See [`cache`] module for details.
+//! Files can be cached with fingerprint-based invalidation.
+//! See [`SharedFileCache`] for details.
 
 mod access;
 mod cache;
 mod read;
+mod resolver;
 mod vfs;
 
 pub use access::{get_accessed_files, record_file_access, reset_access_flags};
-pub use cache::{clear_file_cache, FileSlot, SharedFileCache, SlotCell, GLOBAL_FILE_CACHE};
+pub use cache::{FileSlot, SharedFileCache, SlotCell};
 pub use read::{
-    decode_utf8, file_id, file_id_from_path, read_file, read_with_global_virtual, virtual_file_id,
-    EMPTY_ID, STDIN_ID,
+    decode_utf8, file_id, file_id_from_path, read_file, virtual_file_id, EMPTY_ID, STDIN_ID,
 };
-pub use vfs::{is_virtual_path, set_virtual_fs, MapVirtualFS, NoVirtualFS, PackageId, PackageVersion, VirtualFileSystem};
+pub use resolver::FileResolver;
+pub use vfs::{MapVirtualFS, NoVirtualFS, PackageId, PackageVersion, VirtualFileSystem};

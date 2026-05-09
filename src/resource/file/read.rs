@@ -1,4 +1,4 @@
-//! File reading with virtual file system and package support.
+//! Basic file identifiers and disk reads.
 
 use std::fs;
 use std::io::{self, Read};
@@ -7,10 +7,7 @@ use std::sync::LazyLock;
 
 use typst::diag::{FileError, FileResult};
 use typst::syntax::{FileId, VirtualPath};
-use typst_kit::download::{DownloadState, Progress};
 
-use super::access::record_file_access;
-use super::vfs::{read_virtual, read_virtual_package, NoVirtualFS, VirtualFileSystem};
 use crate::resource::package;
 
 
@@ -42,20 +39,8 @@ pub fn virtual_file_id(name: &str) -> FileId {
 
 
 
-/// Read file content from a `FileId` (no virtual support).
+/// Read file content from a `FileId` without virtual files.
 pub fn read_file(id: FileId, project_root: &Path) -> FileResult<Vec<u8>> {
-    read_with_virtual(id, project_root, &NoVirtualFS)
-}
-
-/// Read file content using the global virtual file system.
-///
-/// Resolution order:
-/// 1. Special IDs (EMPTY, STDIN)
-/// 2. Virtual packages (`@myapp/data:0.0.0`)
-/// 3. Virtual paths (`/_data/*.json`)
-/// 4. Physical files
-pub fn read_with_global_virtual(id: FileId, project_root: &Path) -> FileResult<Vec<u8>> {
-    // Handle special file IDs
     if id == *EMPTY_ID {
         return Ok(Vec::new());
     }
@@ -63,57 +48,6 @@ pub fn read_with_global_virtual(id: FileId, project_root: &Path) -> FileResult<V
         return read_stdin();
     }
 
-    // Check virtual package first (VPS support)
-    if let Some(spec) = id.package()
-        && let Some(content) = read_virtual_package(spec, id.vpath()) {
-            record_file_access(id);
-            return Ok(content);
-        }
-
-    // Check virtual path (VFS support)
-    let vpath = id.vpath().as_rooted_path();
-    if let Some(content) = read_virtual(vpath) {
-        record_file_access(id);
-        return Ok(content);
-    }
-
-    // Resolve and read from disk
-    let path = resolve_path(project_root, id)?;
-    read_disk(&path)
-}
-
-/// Read file content with explicit virtual file system.
-pub fn read_with_virtual<V: VirtualFileSystem>(
-    id: FileId,
-    project_root: &Path,
-    virtual_fs: &V,
-) -> FileResult<Vec<u8>> {
-    // Handle special file IDs
-    if id == *EMPTY_ID {
-        return Ok(Vec::new());
-    }
-    if id == *STDIN_ID {
-        return read_stdin();
-    }
-
-    // Check virtual package first (VPS support)
-    if let Some(spec) = id.package() {
-        let pkg = super::vfs::PackageId::from_spec(spec);
-        let path = id.vpath().as_rooted_path().to_string_lossy();
-        if let Some(content) = virtual_fs.read_package(&pkg, &path) {
-            record_file_access(id);
-            return Ok(content);
-        }
-    }
-
-    // Check virtual path (VFS support)
-    let vpath = id.vpath().as_rooted_path();
-    if let Some(data) = virtual_fs.read(vpath) {
-        record_file_access(id);
-        return Ok(data);
-    }
-
-    // Resolve and read from disk
     let path = resolve_path(project_root, id)?;
     read_disk(&path)
 }
@@ -130,7 +64,7 @@ pub fn decode_utf8(buf: &[u8]) -> FileResult<&str> {
 fn resolve_path(project_root: &Path, id: FileId) -> FileResult<std::path::PathBuf> {
     let root = id
         .package()
-        .map(|spec| package::storage().prepare_package(spec, &mut SilentProgress))
+        .map(|spec| package::Store::new(package::Options::new()).prepare(spec))
         .transpose()?
         .unwrap_or_else(|| project_root.to_path_buf());
 
@@ -138,7 +72,7 @@ fn resolve_path(project_root: &Path, id: FileId) -> FileResult<std::path::PathBu
 }
 
 /// Read file from disk.
-fn read_disk(path: &Path) -> FileResult<Vec<u8>> {
+pub(crate) fn read_disk(path: &Path) -> FileResult<Vec<u8>> {
     let map_err = |e| FileError::from_io(e, path);
     fs::metadata(path).map_err(map_err).and_then(|m| {
         if m.is_dir() {
@@ -163,17 +97,6 @@ fn read_stdin() -> FileResult<Vec<u8>> {
         })?;
     Ok(buf)
 }
-
-/// No-op progress reporter for silent package downloads.
-struct SilentProgress;
-
-impl Progress for SilentProgress {
-    fn print_start(&mut self) {}
-    fn print_progress(&mut self, _: &DownloadState) {}
-    fn print_finish(&mut self, _: &DownloadState) {}
-}
-
-
 
 #[cfg(test)]
 mod tests {
