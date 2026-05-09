@@ -68,7 +68,7 @@ pub(crate) fn inject_main_source<'a>(
 
 #[cfg(test)]
 mod tests {
-    use typst::syntax::VirtualPath;
+    use typst::syntax::{FileId, VirtualPath};
 
     use super::{build_source, inject_main_source};
 
