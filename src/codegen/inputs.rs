@@ -4,26 +4,32 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
+use typst::World;
 use typst::comemo::Track;
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{Array, Context, Dict, IntoValue, Value};
 use typst::introspection::Introspector;
-use typst::World;
 
-use super::{json_to_content, ConvertError};
+use super::{ConvertError, json_to_content};
 use crate::world::TypstWorld;
 
 /// Opaque inputs type for `sys.inputs` injection.
 ///
-/// Created via [`Inputs::from_json()`]. Pass to [`Batcher::with_inputs()`].
+/// Created via [`Inputs::from_json()`]. Pass to `with_inputs_obj()`.
+#[derive(Clone, Default)]
 pub struct Inputs {
     pub(crate) dict: Dict,
 }
 
 impl Inputs {
     /// Create empty inputs.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create empty inputs.
     pub fn empty() -> Self {
-        Self { dict: Dict::new() }
+        Self::new()
     }
 
     /// Create inputs from JSON value.
@@ -264,6 +270,23 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
     use typst::foundations::Str;
+
+    #[test]
+    fn default_inputs_are_empty() {
+        assert_eq!(Inputs::default().into_dict().len(), 0);
+        assert_eq!(Inputs::new().into_dict().len(), 0);
+    }
+
+    #[test]
+    fn cloned_inputs_can_be_extended_without_mutating_original() {
+        let original = Inputs::from_json(&json!({"title": "Original"})).unwrap();
+        let mut cloned = original.clone();
+
+        cloned.merge(Inputs::from_json(&json!({"draft": false})).unwrap());
+
+        assert_eq!(original.into_dict().len(), 1);
+        assert_eq!(cloned.into_dict().len(), 2);
+    }
 
     #[test]
     fn test_from_json_simple() {

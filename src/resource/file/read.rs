@@ -10,8 +10,6 @@ use typst::syntax::{FileId, VirtualPath};
 
 use crate::resource::package;
 
-
-
 /// Virtual `FileId` for stdin input.
 pub static STDIN_ID: LazyLock<FileId> =
     LazyLock::new(|| FileId::new_fake(VirtualPath::new("<stdin>")));
@@ -19,8 +17,6 @@ pub static STDIN_ID: LazyLock<FileId> =
 /// Virtual `FileId` for empty/no input.
 pub static EMPTY_ID: LazyLock<FileId> =
     LazyLock::new(|| FileId::new_fake(VirtualPath::new("<empty>")));
-
-
 
 /// Create a `FileId` for a project file.
 pub fn file_id(path: impl AsRef<Path>) -> FileId {
@@ -36,8 +32,6 @@ pub fn file_id_from_path(file_path: &Path, root: &Path) -> Option<FileId> {
 pub fn virtual_file_id(name: &str) -> FileId {
     FileId::new_fake(VirtualPath::new(name))
 }
-
-
 
 /// Read file content from a `FileId` without virtual files.
 pub fn read_file(id: FileId, project_root: &Path) -> FileResult<Vec<u8>> {
@@ -58,13 +52,11 @@ pub fn decode_utf8(buf: &[u8]) -> FileResult<&str> {
     std::str::from_utf8(buf).map_err(|_| FileError::InvalidUtf8)
 }
 
-
-
 /// Resolve file path, downloading package if needed.
 fn resolve_path(project_root: &Path, id: FileId) -> FileResult<std::path::PathBuf> {
     let root = id
         .package()
-        .map(|spec| package::Store::new(package::Options::new()).prepare(spec))
+        .map(|spec| package::PackageStore::new(package::PackageOptions::new()).prepare_spec(spec))
         .transpose()?
         .unwrap_or_else(|| project_root.to_path_buf());
 
@@ -86,15 +78,13 @@ pub(crate) fn read_disk(path: &Path) -> FileResult<Vec<u8>> {
 /// Read all data from stdin.
 fn read_stdin() -> FileResult<Vec<u8>> {
     let mut buf = Vec::new();
-    io::stdin()
-        .read_to_end(&mut buf)
-        .or_else(|e| {
-            if e.kind() == io::ErrorKind::BrokenPipe {
-                Ok(0)
-            } else {
-                Err(FileError::from_io(e, Path::new("<stdin>")))
-            }
-        })?;
+    io::stdin().read_to_end(&mut buf).or_else(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Ok(0)
+        } else {
+            Err(FileError::from_io(e, Path::new("<stdin>")))
+        }
+    })?;
     Ok(buf)
 }
 

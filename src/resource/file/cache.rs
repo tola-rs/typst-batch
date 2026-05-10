@@ -4,15 +4,15 @@
 //!
 //! ```text
 //! SharedFileCache
-//! └── FxHashMap<FileId, Arc<Mutex<FileSlot>>>
+//! └── FxHashMap<CacheKey(RootKey, FileId), Arc<Mutex<FileSlot>>>
 //!     └── FileSlot
 //!         ├── source: SlotCell<Source>  ─┐
 //!         └── file: SlotCell<Bytes>     ─┼── Fingerprint-based invalidation
 //! ```
 
-use std::sync::Arc;
 use std::mem;
 use std::path::Path;
+use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashMap;
@@ -20,17 +20,41 @@ use typst::diag::FileResult;
 use typst::foundations::Bytes;
 use typst::syntax::{FileId, Source};
 
+use super::FileResolver;
 use super::access::{current_generation, record_file_access};
 use super::read::decode_utf8;
-use super::FileResolver;
 
-/// Shared cache keyed by `FileId`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RootKey(u128);
+
+impl RootKey {
+    fn new(root: &Path) -> Self {
+        Self(typst::utils::hash128(root))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    root: RootKey,
+    file: FileId,
+}
+
+impl CacheKey {
+    fn new(root: &Path, id: FileId) -> Self {
+        Self {
+            root: RootKey::new(root),
+            file: id,
+        }
+    }
+}
+
+/// Shared file cache scoped by root and `FileId`.
 ///
 /// Each file gets its own lock, so unrelated files can be processed in parallel
 /// without contending on the whole cache map.
 #[derive(Default)]
 pub struct SharedFileCache {
-    slots: RwLock<FxHashMap<FileId, Arc<Mutex<FileSlot>>>>,
+    slots: RwLock<FxHashMap<CacheKey, Arc<Mutex<FileSlot>>>>,
 }
 
 impl SharedFileCache {
@@ -52,7 +76,7 @@ impl SharedFileCache {
         root: &Path,
         files: &FileResolver,
     ) -> FileResult<Source> {
-        self.slot(id).lock().source_with_files(root, files)
+        self.slot(root, id).lock().source_with_files(root, files)
     }
 
     /// Read and cache raw bytes using an explicit file resolver.
@@ -62,18 +86,19 @@ impl SharedFileCache {
         root: &Path,
         files: &FileResolver,
     ) -> FileResult<Bytes> {
-        self.slot(id).lock().file_with_files(root, files)
+        self.slot(root, id).lock().file_with_files(root, files)
     }
 
-    fn slot(&self, id: FileId) -> Arc<Mutex<FileSlot>> {
-        if let Some(slot) = self.slots.read().get(&id) {
+    fn slot(&self, root: &Path, id: FileId) -> Arc<Mutex<FileSlot>> {
+        let key = CacheKey::new(root, id);
+        if let Some(slot) = self.slots.read().get(&key) {
             return Arc::clone(slot);
         }
 
         let mut slots = self.slots.write();
         Arc::clone(
             slots
-                .entry(id)
+                .entry(key)
                 .or_insert_with(|| Arc::new(Mutex::new(FileSlot::new(id)))),
         )
     }
@@ -132,9 +157,7 @@ impl<T: Clone> SlotCell<T> {
         let was_accessed = self.is_accessed();
         self.mark_accessed();
 
-        if was_accessed
-            && let Some(data) = &self.data
-        {
+        if was_accessed && let Some(data) = &self.data {
             return data.clone();
         }
 
@@ -206,10 +229,11 @@ impl FileSlot {
         files: &FileResolver,
     ) -> FileResult<Bytes> {
         record_file_access(self.id);
-        self.file
-            .get_or_init(|| files.read(self.id, project_root), |data, _| Ok(Bytes::new(data)))
+        self.file.get_or_init(
+            || files.read(self.id, project_root),
+            |data, _| Ok(Bytes::new(data)),
+        )
     }
-
 }
 
 // =============================================================================
@@ -268,5 +292,25 @@ mod tests {
 
         assert!(result1.is_ok());
         assert_eq!(result1.unwrap(), result2.unwrap());
+    }
+
+    #[test]
+    fn shared_cache_separates_same_file_id_across_roots() {
+        reset_access_flags();
+
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        fs::write(first.path().join("same.typ"), "= First").unwrap();
+        fs::write(second.path().join("same.typ"), "= Second").unwrap();
+
+        let id = FileId::new(None, VirtualPath::new("same.typ"));
+        let cache = SharedFileCache::new();
+        let files = FileResolver::new();
+
+        let first_source = cache.source_with_files(id, first.path(), &files).unwrap();
+        let second_source = cache.source_with_files(id, second.path(), &files).unwrap();
+
+        assert!(first_source.text().contains("First"));
+        assert!(second_source.text().contains("Second"));
     }
 }

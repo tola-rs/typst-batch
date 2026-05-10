@@ -4,7 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::resource::file::{FileResolver, PackageId};
+use crate::resource::file::FileResolver;
+use crate::resource::package::PackageId;
 
 use super::common::{collect_accessed_files, collect_accessed_packages, reset_tracking};
 

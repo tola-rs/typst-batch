@@ -32,13 +32,15 @@ typst-batch = "0.1"
 
 ```rust
 use typst_batch::prelude::*;
+use std::path::Path;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize fonts once at startup
-    get_fonts(&[]);
+    let fonts = Arc::new(FontStore::with_paths(&[]).preload());
 
     // Compile a single file
     let result = Compiler::new(Path::new("."))
+        .with_font_store(fonts)
         .with_path(Path::new("doc.typ"))
         .compile()?;
 
@@ -99,16 +101,16 @@ let non_drafts: Vec<_> = files.iter()
     .map(|(p, _)| p)
     .collect();
 
-// Batch compile with progress callback
+// Batch compile with completion callback
 let results = batcher.batch_compile_each(&non_drafts, |path| {
     println!("Compiled: {}", path.display());
 })?;
 
-// Batch compile with per-file context
-let results = batcher.batch_compile_with_context(&files, |path| {
-    serde_json::json!({
+// Batch compile with per-file inputs
+let results = batcher.batch_compile_with_inputs(&files, |path| {
+    Inputs::from_json(&serde_json::json!({
         "current_file": path.to_string_lossy(),
-    })
+    })).unwrap()
 })?;
 ```
 
@@ -118,7 +120,7 @@ let results = batcher.batch_compile_with_context(&files, |path| {
 use typst_batch::prelude::*;
 
 // Single file scan
-let result = Scanner::new(path, root).scan()?;
+let result = Scanner::new(root).scan(path)?;
 let links = result.links();
 let headings = result.headings();
 let meta = result.metadata("post-meta");
@@ -136,7 +138,12 @@ use typst_batch::prelude::*;
 
 let mut vfs = MapVirtualFS::new();
 vfs.insert("/_data/site.json", r#"{"title":"My Blog"}"#);
-set_virtual_fs(vfs);
+
+let files = FileResolver::new().with_virtual_fs(vfs);
+let result = Compiler::new(root)
+    .with_files(files)
+    .with_path(path)
+    .compile()?;
 ```
 
 In Typst:
@@ -144,6 +151,26 @@ In Typst:
 #let site = json("/_data/site.json")
 = #site.title
 ```
+
+### Package Storage
+
+```rust
+use typst_batch::prelude::*;
+
+let packages = PackageStore::new(
+    PackageOptions::new()
+        .with_package_path("vendor/typst-packages")
+        .with_package_cache_path(".cache/typst-packages"),
+);
+
+let metalogo = PackageId::new("preview", "metalogo", PackageVersion::new(1, 2, 0));
+let package_dir = packages.prepare(&metalogo)?;
+
+let files = FileResolver::new().with_package_store(packages);
+```
+
+If no explicit paths are provided, package storage reads
+`TYPST_PACKAGE_PATH` and `TYPST_PACKAGE_CACHE_PATH`.
 
 ### SVG Frame Rendering
 

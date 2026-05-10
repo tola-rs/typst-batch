@@ -44,7 +44,7 @@ mod vfs;
 pub use access::{get_accessed_files, record_file_access, reset_access_flags};
 pub use cache::{FileSlot, SharedFileCache, SlotCell};
 pub use read::{
-    decode_utf8, file_id, file_id_from_path, read_file, virtual_file_id, EMPTY_ID, STDIN_ID,
+    EMPTY_ID, STDIN_ID, decode_utf8, file_id, file_id_from_path, read_file, virtual_file_id,
 };
 pub use resolver::FileResolver;
-pub use vfs::{MapVirtualFS, NoVirtualFS, PackageId, PackageVersion, VirtualFileSystem};
+pub use vfs::{MapVirtualFS, NoVirtualFS, VirtualFileSystem};

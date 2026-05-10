@@ -227,6 +227,17 @@ impl FontStore {
         Self::with_options(FontOptions::new().with_custom_paths(paths))
     }
 
+    /// Load fonts now and return the store.
+    pub fn preload(self) -> Self {
+        self.ensure_loaded();
+        self
+    }
+
+    /// Load fonts now if they have not been loaded yet.
+    pub fn ensure_loaded(&self) {
+        let _ = self.get();
+    }
+
     /// Get the loaded fonts, initializing them on first use.
     pub fn get(&self) -> &(Fonts, LazyHash<FontBook>) {
         self.fonts.get_or_init(|| init_fonts_impl(&self.options))
@@ -326,6 +337,14 @@ fn sort_fonts_deterministically(fonts: Fonts) -> Fonts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_marks_store_loaded() {
+        let paths: [&Path; 0] = [];
+        let fonts = FontStore::with_paths(&paths).preload();
+
+        assert!(fonts.is_loaded());
+    }
 
     #[test]
     fn font_store_loads_fonts() {

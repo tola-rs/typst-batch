@@ -28,17 +28,16 @@ use std::sync::Arc;
 
 use typst::foundations::Dict;
 
-use crate::codegen::json_to_simple_value;
+use crate::codegen::Inputs;
 use crate::diagnostic::CompileError;
 use crate::resource::file::{FileResolver, SharedFileCache};
 use crate::resource::font::FontStore;
 use crate::world::{SnapshotConfig, SourceSnapshot, TypstWorld};
 
-use super::compile::{compile_with_world, CompileResult};
+use super::compile::{CompileResult, compile_with_world};
 use super::inputs::WithInputs;
 #[cfg(feature = "scan")]
-use super::scan::{scan_impl, ScanResult};
-
+use super::scan::{ScanResult, scan_impl};
 
 /// Batch compiler with shared file snapshot.
 ///
@@ -134,7 +133,11 @@ impl<'a> Batcher<'a> {
     ///
     /// Note: Prelude/postlude must be set before calling this method for them
     /// to be injected into the snapshot.
-    pub fn with_snapshot_from_each<P, F>(mut self, paths: &[P], on_each: F) -> Result<Self, CompileError>
+    pub fn with_snapshot_from_each<P, F>(
+        mut self,
+        paths: &[P],
+        on_each: F,
+    ) -> Result<Self, CompileError>
     where
         P: AsRef<Path>,
         F: Fn(&Path) + Sync,
@@ -277,42 +280,47 @@ impl<'a> Batcher<'a> {
         Ok(results)
     }
 
-    /// Compile multiple files in parallel with per-file context.
+    /// Compile multiple files in parallel with per-file inputs.
     ///
-    /// For each file, `context_fn` is called to generate additional inputs
-    /// that are merged with the base inputs. This enables injecting per-file
-    /// data (e.g., navigation context, related pages) into `sys.inputs`.
-    ///
-    /// # Arguments
-    ///
-    /// * `paths` - Files to compile
-    /// * `context_fn` - Function that returns per-file context as JSON.
-    ///   The JSON object's keys are merged into `sys.inputs`.
+    /// Values returned by `inputs_for` are merged over base inputs configured
+    /// with `with_inputs_obj()` or `with_inputs_dict()`.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// use serde_json::json;
+    /// use typst_batch::Inputs;
     ///
     /// let batcher = Batcher::new(root)
     ///     .with_inputs_obj(global_inputs)
     ///     .with_snapshot_from(&files)?;
     ///
-    /// let results = batcher.batch_compile_with_context(&files, |path| {
-    ///     json!({
-    ///         "current_file": path.to_string_lossy(),
-    ///         "custom_data": get_data_for(path),
-    ///     })
+    /// let results = batcher.batch_compile_with_inputs(&files, |path| {
+    ///     Inputs::from_json(&data_for(path)).unwrap()
     /// })?;
     /// ```
-    pub fn batch_compile_with_context<P, F>(
+    pub fn batch_compile_with_inputs<P, F>(
         &self,
         paths: &[P],
-        context_fn: F,
+        inputs_for: F,
     ) -> Result<Vec<Result<CompileResult, CompileError>>, CompileError>
     where
         P: AsRef<Path> + Sync,
-        F: Fn(&Path) -> serde_json::Value + Sync,
+        F: Fn(&Path) -> Inputs + Sync,
+    {
+        self.batch_compile_with_inputs_each(paths, inputs_for, |_| {})
+    }
+
+    /// Compile multiple files in parallel with per-file inputs and completion callback.
+    pub fn batch_compile_with_inputs_each<P, F, G>(
+        &self,
+        paths: &[P],
+        inputs_for: F,
+        on_each: G,
+    ) -> Result<Vec<Result<CompileResult, CompileError>>, CompileError>
+    where
+        P: AsRef<Path> + Sync,
+        F: Fn(&Path) -> Inputs + Sync,
+        G: Fn(&Path) + Sync,
     {
         use rayon::prelude::*;
 
@@ -322,14 +330,15 @@ impl<'a> Batcher<'a> {
 
         let snapshot = self.get_or_build_snapshot(paths)?;
 
-        // Compile in parallel with per-file context
+        // Compile in parallel with per-file inputs.
         let results: Vec<_> = paths
             .par_iter()
             .map(|path| {
                 let path = path.as_ref();
-                let context_json = context_fn(path);
-                let world = self.build_world_with_context(path, &snapshot, &context_json);
-                compile_with_world(&world)
+                let world = self.build_world_with_inputs(path, &snapshot, inputs_for(path));
+                let result = compile_with_world(&world);
+                on_each(path);
+                result
             })
             .collect();
 
@@ -395,22 +404,15 @@ impl<'a> Batcher<'a> {
         }
     }
 
-    fn build_world_with_context(
+    fn build_world_with_inputs(
         &self,
         path: &Path,
         snapshot: &Arc<SourceSnapshot>,
-        context_json: &serde_json::Value,
+        inputs: Inputs,
     ) -> TypstWorld {
-        // Start with base inputs or empty
         let mut merged = self.inputs.clone().unwrap_or_default();
-
-        // Merge context JSON into inputs
-        if let Some(obj) = context_json.as_object() {
-            for (key, value) in obj {
-                if let Ok(typst_value) = json_to_simple_value(value) {
-                    merged.insert(key.as_str().into(), typst_value);
-                }
-            }
+        for (key, value) in inputs.into_dict() {
+            merged.insert(key, value);
         }
 
         // Pass prelude for line offset calculation in diagnostics
@@ -427,8 +429,6 @@ impl<'a> Batcher<'a> {
         builder.build()
     }
 }
-
-
 
 /// Lightweight batch scanner without font loading.
 ///
@@ -559,5 +559,71 @@ impl<'a> BatchScanner<'a> {
         }
 
         builder.build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::Inputs;
+    use serde_json::json;
+    use std::fs;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    #[test]
+    fn batch_compile_with_inputs_uses_per_file_inputs() {
+        let dir = TempDir::new().unwrap();
+        let first = dir.path().join("first.typ");
+        let second = dir.path().join("second.typ");
+        let source = r#"#let title = sys.inputs.at("title", default: "missing")
+= #title"#;
+        fs::write(&first, source).unwrap();
+        fs::write(&second, source).unwrap();
+
+        let batcher = Batcher::new(dir.path())
+            .with_snapshot_from(&[&first, &second])
+            .unwrap();
+        let results = batcher
+            .batch_compile_with_inputs(&[&first, &second], |path| {
+                let title = if path == first.as_path() {
+                    "First"
+                } else {
+                    "Second"
+                };
+                Inputs::from_json(&json!({ "title": title })).unwrap()
+            })
+            .unwrap();
+
+        let first_html = results[0].as_ref().unwrap().html().unwrap();
+        let second_html = results[1].as_ref().unwrap().html().unwrap();
+
+        assert!(String::from_utf8_lossy(&first_html).contains("First"));
+        assert!(String::from_utf8_lossy(&second_html).contains("Second"));
+    }
+
+    #[test]
+    fn batch_compile_with_inputs_each_reports_finished_files() {
+        let dir = TempDir::new().unwrap();
+        let first = dir.path().join("first.typ");
+        let second = dir.path().join("second.typ");
+        fs::write(&first, "= First").unwrap();
+        fs::write(&second, "= Second").unwrap();
+
+        let finished = Mutex::new(Vec::new());
+        let batcher = Batcher::new(dir.path())
+            .with_snapshot_from(&[&first, &second])
+            .unwrap();
+        let results = batcher
+            .batch_compile_with_inputs_each(
+                &[&first, &second],
+                |_| Inputs::empty(),
+                |path| finished.lock().unwrap().push(path.to_path_buf()),
+            )
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(Result::is_ok));
+        assert_eq!(finished.lock().unwrap().len(), 2);
     }
 }

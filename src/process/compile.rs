@@ -17,17 +17,6 @@
 //!     .with_path(Path::new("doc.typ"))
 //!     .compile()?;
 //!
-//! // Custom World (advanced)
-//! let result = Compiler::new(Path::new("."))
-//!     .with_path(Path::new("doc.typ"))
-//!     .with_world(|main, root| {
-//!         TypstWorld::builder(main, root)
-//!             .with_local_cache()
-//!             .with_fonts()
-//!             .build()
-//!     })
-//!     .compile()?;
-//!
 //! // Batch compilation (requires `batch` feature)
 //! let batcher = Compiler::new(Path::new("."))
 //!     .into_batch()
@@ -41,59 +30,15 @@ use std::sync::Arc;
 
 use typst::foundations::Dict;
 
-use crate::diagnostic::{filter_html_warnings, has_errors, CompileError, Diagnostics};
+use crate::diagnostic::{CompileError, Diagnostics, filter_html_warnings, has_errors};
 use crate::html::HtmlDocument;
 use crate::world::TypstWorld;
 
 use super::inputs::WithInputs;
 use super::session::{AccessedDeps, CompileSession};
-use crate::resource::file::{FileResolver, PackageId, SharedFileCache};
+use crate::resource::file::{FileResolver, SharedFileCache};
 use crate::resource::font::FontStore;
-
-/// Type alias for custom World builder function.
-type WorldBuilderFn<'a> = Box<dyn FnOnce(MainPath<'_>, RootPath<'_>) -> TypstWorld + 'a>;
-
-
-
-/// Wrapper for the main file path, ensuring type safety.
-///
-/// Users cannot construct this directly; it's only created internally
-/// and passed to closures in `with_world()`.
-pub struct MainPath<'a>(&'a Path);
-
-impl<'a> MainPath<'a> {
-    /// Get the underlying path.
-    pub fn as_path(&self) -> &'a Path {
-        self.0
-    }
-}
-
-impl AsRef<Path> for MainPath<'_> {
-    fn as_ref(&self) -> &Path {
-        self.0
-    }
-}
-
-/// Wrapper for the root directory path, ensuring type safety.
-///
-/// Users cannot construct this directly; it's only created internally
-/// and passed to closures in `with_world()`.
-pub struct RootPath<'a>(&'a Path);
-
-impl<'a> RootPath<'a> {
-    /// Get the underlying path.
-    pub fn as_path(&self) -> &'a Path {
-        self.0
-    }
-}
-
-impl AsRef<Path> for RootPath<'_> {
-    fn as_ref(&self) -> &Path {
-        self.0
-    }
-}
-
-
+use crate::resource::package::PackageId;
 
 /// Builder for Typst compilation.
 ///
@@ -188,7 +133,6 @@ impl<'a> Compiler<'a> {
             inputs: self.inputs,
             preludes: self.preludes,
             postludes: self.postludes,
-            world_builder: None,
         }
     }
 
@@ -198,7 +142,6 @@ impl<'a> Compiler<'a> {
     /// Any `with_inputs()` settings are inherited.
     ///
     /// **Note**: Batch mode uses lock-free snapshot caching internally.
-    /// Custom `with_world()` settings from single-file mode do not apply.
     #[cfg(feature = "batch")]
     pub fn into_batch(self) -> super::batch::Batcher<'a> {
         let mut batcher = super::batch::Batcher::new(self.root);
@@ -214,28 +157,9 @@ impl<'a> Compiler<'a> {
     }
 }
 
-
-
 /// Builder for single-file compilation.
 ///
 /// Created via `Compiler::new(root).with_path(path)`.
-///
-/// # Custom World
-///
-/// By default, uses shared cache mode (suitable for serve/hot-reload).
-/// For custom caching strategies, use `with_world()`:
-///
-/// ```ignore
-/// Compiler::new(root)
-///     .with_path(path)
-///     .with_world(|main, root| {
-///         TypstWorld::builder(main, root)
-///             .with_local_cache()  // No shared state
-///             .with_fonts()
-///             .build()
-///     })
-///     .compile()?;
-/// ```
 pub struct SingleCompiler<'a> {
     root: &'a Path,
     path: PathBuf,
@@ -245,7 +169,6 @@ pub struct SingleCompiler<'a> {
     inputs: Option<Dict>,
     preludes: Vec<String>,
     postludes: Vec<String>,
-    world_builder: Option<WorldBuilderFn<'a>>,
 }
 
 impl<'a> WithInputs for SingleCompiler<'a> {
@@ -267,38 +190,9 @@ impl<'a> SingleCompiler<'a> {
         self
     }
 
-    /// Provide a custom World builder.
-    ///
-    /// The closure receives type-safe path wrappers that can only be obtained
-    /// through this API, ensuring the World's paths match the compiler's paths.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// Compiler::new(root)
-    ///     .with_path(path)
-    ///     .with_world(|main, root| {
-    ///         TypstWorld::builder(main, root)
-    ///             .with_local_cache()
-    ///             .with_fonts()
-    ///             .build()
-    ///     })
-    ///     .compile()?;
-    /// ```
-    pub fn with_world<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(MainPath<'_>, RootPath<'_>) -> TypstWorld + 'a,
-    {
-        self.world_builder = Some(Box::new(f));
-        self
-    }
-
     /// Compile the file.
     pub fn compile(self) -> Result<CompileResult, CompileError> {
-        let world = match self.world_builder {
-            Some(builder) => builder(MainPath(&self.path), RootPath(self.root)),
-            None => self.default_world(),
-        };
+        let world = self.default_world();
         compile_with_world(&world)
     }
 
@@ -331,8 +225,6 @@ impl<'a> SingleCompiler<'a> {
         self.preludes.join("\n")
     }
 }
-
-
 
 /// Result of a successful compilation.
 #[derive(Debug)]
@@ -388,7 +280,10 @@ impl CompileResult {
     }
 }
 
-
+/// Compile an explicitly constructed [`TypstWorld`].
+pub fn compile_world(world: &TypstWorld) -> Result<CompileResult, CompileError> {
+    compile_with_world(world)
+}
 
 pub(crate) fn compile_with_world(world: &TypstWorld) -> Result<CompileResult, CompileError> {
     let session = CompileSession::start();
@@ -397,7 +292,11 @@ pub(crate) fn compile_with_world(world: &TypstWorld) -> Result<CompileResult, Co
     let result = typst::compile(world);
 
     if has_errors(&result.warnings) {
-        return Err(CompileError::compilation_with_offset(world, result.warnings.to_vec(), line_offset));
+        return Err(CompileError::compilation_with_offset(
+            world,
+            result.warnings.to_vec(),
+            line_offset,
+        ));
     }
 
     let document = result.output.map_err(|errors| {
@@ -422,7 +321,8 @@ pub(crate) fn compile_with_world(world: &TypstWorld) -> Result<CompileResult, Co
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resource::file::{FileResolver, PackageId, VirtualFileSystem};
+    use crate::resource::file::{FileResolver, VirtualFileSystem};
+    use crate::resource::package::PackageId;
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;

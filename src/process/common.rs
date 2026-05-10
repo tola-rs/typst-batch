@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use rustc_hash::FxHashSet;
 
-use crate::resource::file::{get_accessed_files, reset_access_flags, FileResolver, PackageId};
+use crate::resource::file::{FileResolver, get_accessed_files, reset_access_flags};
+use crate::resource::package::PackageId;
 
 /// Reset file access tracking before compilation/scanning.
 #[inline]

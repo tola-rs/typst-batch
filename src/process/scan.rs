@@ -42,7 +42,8 @@ use typst_html::{HtmlAttr, HtmlElem};
 use super::inputs::WithInputs;
 use super::session::{AccessedDeps, CompileSession};
 use crate::diagnostic::{has_errors, CompileError};
-use crate::resource::file::{FileResolver, PackageId};
+use crate::resource::file::FileResolver;
+use crate::resource::package::PackageId;
 use crate::world::TypstWorld;
 
 /// Builder for fast Typst scanning (Eval-only, skips Layout).
@@ -493,7 +494,8 @@ pub(crate) fn scan_impl(world: &TypstWorld) -> Result<ScanResult, CompileError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resource::file::{FileResolver, PackageId, VirtualFileSystem};
+    use crate::resource::file::{FileResolver, VirtualFileSystem};
+    use crate::resource::package::PackageId;
     use std::path::Path;
     use std::fs;
     use tempfile::TempDir;
