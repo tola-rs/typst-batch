@@ -4,7 +4,7 @@ use typst::foundations::NativeElement;
 use typst::math::{AttachElem, EquationElem, FracElem, RootElem};
 use typst::text::TextElem;
 
-use super::common::{assert_content_roundtrip, assert_typst_roundtrip, TestEnv};
+use super::common::{TestEnv, assert_content_roundtrip, assert_typst_roundtrip};
 
 #[test]
 fn equation() {

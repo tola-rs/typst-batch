@@ -51,7 +51,7 @@ use super::builder::WorldBuilder;
 use super::path::normalize_path;
 use super::source::read_source_with_injection;
 use super::strategy::{FileCacheMode, FontMode, LibraryMode};
-use crate::resource::file::{file_id_from_path, record_file_access, FileResolver};
+use crate::resource::file::{FileResolver, file_id_from_path, record_file_access};
 use crate::resource::library::GLOBAL_LIBRARY;
 
 // =============================================================================

@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
+use typst::ROUTINES;
+use typst::World;
 use typst::comemo::Track;
 use typst::diag::SourceDiagnostic;
 use typst::engine::{Route, Sink, Traced};
@@ -35,13 +37,11 @@ use typst::loading::DataSource;
 use typst::model::{Destination, HeadingElem, LinkElem, LinkTarget};
 use typst::utils::PicoStr;
 use typst::visualize::ImageElem;
-use typst::World;
-use typst::ROUTINES;
 use typst_html::{HtmlAttr, HtmlElem};
 
 use super::inputs::WithInputs;
 use super::session::{AccessedDeps, CompileSession};
-use crate::diagnostic::{has_errors, CompileError};
+use crate::diagnostic::{CompileError, has_errors};
 use crate::resource::file::FileResolver;
 use crate::resource::package::PackageId;
 use crate::world::TypstWorld;
@@ -386,7 +386,11 @@ impl Extractor for HeadingExtractor {
                     typst::model::Supplement::Func(_) => None,
                 })
                 .filter(|s| s != "Section");
-            self.headings.push(Heading { level, text, supplement });
+            self.headings.push(Heading {
+                level,
+                text,
+                supplement,
+            });
         }
         ControlFlow::Continue(())
     }
@@ -477,7 +481,11 @@ pub(crate) fn scan_impl(world: &TypstWorld) -> Result<ScanResult, CompileError> 
     })?;
 
     if has_errors(&warnings) {
-        return Err(CompileError::compilation_with_offset(world, warnings.to_vec(), line_offset));
+        return Err(CompileError::compilation_with_offset(
+            world,
+            warnings.to_vec(),
+            line_offset,
+        ));
     }
 
     let accessed = session.finish(world.root(), world.files());
@@ -489,15 +497,13 @@ pub(crate) fn scan_impl(world: &TypstWorld) -> Result<ScanResult, CompileError> 
     })
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::resource::file::{FileResolver, VirtualFileSystem};
     use crate::resource::package::PackageId;
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     struct ProbeVfs(&'static str);
@@ -592,11 +598,7 @@ mod tests {
         fs::write(&img_path, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
 
         let file = dir.path().join("test.typ");
-        fs::write(
-            &file,
-            r#"#image("test.png")"#,
-        )
-        .unwrap();
+        fs::write(&file, r#"#image("test.png")"#).unwrap();
 
         let result = Scanner::new(dir.path()).scan(&file).unwrap();
         let links = result.extract(LinkExtractor::new());
@@ -634,11 +636,7 @@ mod tests {
     fn test_extract_metadata() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("test.typ");
-        fs::write(
-            &file,
-            r#"#metadata((title: "Test")) <meta>"#,
-        )
-        .unwrap();
+        fs::write(&file, r#"#metadata((title: "Test")) <meta>"#).unwrap();
 
         let result = Scanner::new(dir.path()).scan(&file).unwrap();
         let meta = result.extract(MetadataExtractor::new("meta").unwrap());
@@ -660,10 +658,7 @@ mod tests {
         .unwrap();
 
         let result = Scanner::new(dir.path()).scan(&file).unwrap();
-        let (links, headings) = result.extract((
-            LinkExtractor::new(),
-            HeadingExtractor::new(),
-        ));
+        let (links, headings) = result.extract((LinkExtractor::new(), HeadingExtractor::new()));
 
         assert_eq!(links.len(), 1);
         assert_eq!(headings.len(), 1);
@@ -671,12 +666,30 @@ mod tests {
 
     #[test]
     fn test_link_classification() {
-        let http = Link { dest: "http://x.com".into(), source: LinkSource::Link };
-        let https = Link { dest: "https://x.com".into(), source: LinkSource::Link };
-        let mailto = Link { dest: "mailto:a@b.com".into(), source: LinkSource::Href };
-        let root = Link { dest: "/about".into(), source: LinkSource::Link };
-        let fragment = Link { dest: "#section".into(), source: LinkSource::Link };
-        let relative = Link { dest: "./img.png".into(), source: LinkSource::Src };
+        let http = Link {
+            dest: "http://x.com".into(),
+            source: LinkSource::Link,
+        };
+        let https = Link {
+            dest: "https://x.com".into(),
+            source: LinkSource::Link,
+        };
+        let mailto = Link {
+            dest: "mailto:a@b.com".into(),
+            source: LinkSource::Href,
+        };
+        let root = Link {
+            dest: "/about".into(),
+            source: LinkSource::Link,
+        };
+        let fragment = Link {
+            dest: "#section".into(),
+            source: LinkSource::Link,
+        };
+        let relative = Link {
+            dest: "./img.png".into(),
+            source: LinkSource::Src,
+        };
 
         assert!(http.is_http() && http.is_external());
         assert!(https.is_http() && https.is_external());

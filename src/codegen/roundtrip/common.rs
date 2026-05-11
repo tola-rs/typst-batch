@@ -4,15 +4,15 @@ use std::fs;
 use tempfile::TempDir;
 
 use serde_json::Value as JsonValue;
+use typst::World;
 use typst::comemo::Track;
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{Content, Context};
 use typst::introspection::Introspector;
-use typst::World;
 
+use crate::Scanner;
 use crate::codegen::{content_to_json, json_to_content};
 use crate::world::TypstWorld;
-use crate::Scanner;
 
 /// Test environment providing Engine, Context, and Library.
 pub struct TestEnv {
@@ -76,8 +76,8 @@ pub fn json_eq(a: &JsonValue, b: &JsonValue) -> bool {
 /// Test JSON → Content → JSON roundtrip.
 pub fn assert_roundtrip(env: &TestEnv, json: JsonValue) {
     env.run(|engine, context, library| {
-        let content = json_to_content(engine, context, library, &json)
-            .expect("json_to_content failed");
+        let content =
+            json_to_content(engine, context, library, &json).expect("json_to_content failed");
         let result = content_to_json(&content);
 
         assert!(
@@ -93,8 +93,8 @@ pub fn assert_roundtrip(env: &TestEnv, json: JsonValue) {
 pub fn assert_content_roundtrip(env: &TestEnv, content: Content) {
     env.run(|engine, context, library| {
         let json1 = content_to_json(&content);
-        let content2 = json_to_content(engine, context, library, &json1)
-            .expect("json_to_content failed");
+        let content2 =
+            json_to_content(engine, context, library, &json1).expect("json_to_content failed");
         let json2 = content_to_json(&content2);
 
         assert!(

@@ -57,9 +57,7 @@ pub fn json_to_simple_text(json: &JsonValue) -> JsonValue {
                 JsonValue::Object(simplified)
             }
         }
-        JsonValue::Array(arr) => {
-            JsonValue::Array(arr.iter().map(json_to_simple_text).collect())
-        }
+        JsonValue::Array(arr) => JsonValue::Array(arr.iter().map(json_to_simple_text).collect()),
         other => other.clone(),
     }
 }

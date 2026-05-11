@@ -60,8 +60,6 @@ impl ToTypst for bool {
     }
 }
 
-
-
 impl<T: ToTypst> ToTypst for Option<T> {
     fn to_typst(&self) -> String {
         match self {

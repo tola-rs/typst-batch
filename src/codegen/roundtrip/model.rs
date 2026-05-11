@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::codegen::content_to_json;
 
-use super::common::{assert_typst_roundtrip, compile_typst, TestEnv};
+use super::common::{TestEnv, assert_typst_roundtrip, compile_typst};
 
 #[test]
 fn formatting() {
@@ -45,13 +45,18 @@ fn grid_basic() {
     let env = TestEnv::new();
 
     // Debug: print the JSON structure
-    let content = compile_typst(r#"#grid(
+    let content = compile_typst(
+        r#"#grid(
   columns: 2,
   [A], [B],
   [C], [D]
-)"#);
+)"#,
+    );
     let json = content_to_json(&content);
-    println!("Grid JSON: {}", serde_json::to_string_pretty(&json).unwrap());
+    println!(
+        "Grid JSON: {}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
 
     // Simple grid with cells
     assert_typst_roundtrip(
@@ -353,8 +358,10 @@ fn list_items() {
     // Test 4: Markdown-style list (- xxx) - also works!
     // The item elements don't have list wrapper, but roundtrip still works
     // because list.item and enum.item have the same JSON structure
-    let md_list = compile_typst(r#"- Item 1
-- Item 2"#);
+    let md_list = compile_typst(
+        r#"- Item 1
+- Item 2"#,
+    );
     let md_json = content_to_json(&md_list);
     env.run(|engine, context, library| {
         use crate::codegen::json_to_content;
@@ -369,10 +376,13 @@ fn table_with_math() {
     let env = TestEnv::new();
 
     // Test: table.cell containing math
-    assert_typst_roundtrip(&env, r#"#table(
+    assert_typst_roundtrip(
+        &env,
+        r#"#table(
   table.cell[$x^2$],
   table.cell[$sqrt(y)$]
-)"#);
+)"#,
+    );
 }
 
 #[test]
@@ -380,7 +390,9 @@ fn nested_complex() {
     let env = TestEnv::new();
 
     // Test: grid with header containing math
-    assert_typst_roundtrip(&env, r#"#grid(
+    assert_typst_roundtrip(
+        &env,
+        r#"#grid(
   columns: 2,
   grid.header(
     grid.cell[*Header 1*],
@@ -388,7 +400,8 @@ fn nested_complex() {
   ),
   grid.cell[A],
   grid.cell[$x + y$]
-)"#);
+)"#,
+    );
 }
 
 #[test]
@@ -402,9 +415,11 @@ fn show_rules() {
 
     // Case 2: Content WITH show rule - fails
     println!("\n=== With show rule ===");
-    let content = compile_typst(r#"#show heading: it => text(red, it.body)
+    let content = compile_typst(
+        r#"#show heading: it => text(red, it.body)
 
-= Hello"#);
+= Hello"#,
+    );
     let json = content_to_json(&content);
     println!("JSON:\n{}", serde_json::to_string_pretty(&json).unwrap());
 
@@ -430,7 +445,10 @@ fn terms() {
             println!("Found item: {:?}", item.name());
             if let Some(params) = item.params() {
                 for p in params {
-                    println!("  param: {} (positional: {}, required: {})", p.name, p.positional, p.required);
+                    println!(
+                        "  param: {} (positional: {}, required: {})",
+                        p.name, p.positional, p.required
+                    );
                 }
             }
         }
@@ -439,7 +457,10 @@ fn terms() {
     // Debug: print the JSON structure
     let content = compile_typst(r#"/ Term: Definition"#);
     let json = content_to_json(&content);
-    println!("Terms JSON: {}", serde_json::to_string_pretty(&json).unwrap());
+    println!(
+        "Terms JSON: {}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
 
     // Term list
     assert_typst_roundtrip(

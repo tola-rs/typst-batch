@@ -22,8 +22,6 @@ mod roundtrip;
 mod serialize;
 mod source;
 
-
-
 // Serialization (Typst → JSON)
 pub use serialize::{content_to_json, json_to_simple_text, value_to_json};
 
@@ -31,16 +29,16 @@ pub use serialize::{content_to_json, json_to_simple_text, value_to_json};
 pub use deserialize::{json_to_content, json_to_value};
 
 // Literal parsing (string → Typst value)
-pub use literal::{parse_typst_literal, parse_angle, parse_color, parse_length, parse_ratio};
+pub use literal::{parse_angle, parse_color, parse_length, parse_ratio, parse_typst_literal};
 
 // Source generation
 pub use source::ToTypst;
 
 // Builders
-pub use builder::{array, array_raw, dict, dict_raw, dict_sparse, format_array, DictBuilder};
+pub use builder::{DictBuilder, array, array_raw, dict, dict_raw, dict_sparse, format_array};
 
 // Inputs
-pub use inputs::{json_to_simple_value, Inputs};
+pub use inputs::{Inputs, json_to_simple_value};
 
 // Errors
 pub use error::ConvertError;

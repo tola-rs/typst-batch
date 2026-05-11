@@ -2,9 +2,9 @@
 
 use std::fmt::Write;
 
+use typst::World;
 use typst::diag::{Severity, SourceDiagnostic};
 use typst::syntax::Span;
-use typst::World;
 
 use super::info::{DiagnosticInfo, SourceLine, TraceInfo};
 
@@ -229,7 +229,11 @@ impl SpanLocation {
     /// The `main_line_offset` is subtracted from line numbers when the span
     /// belongs to the main file. This is used to correct line numbers when
     /// a prelude has been injected at the beginning of the main file.
-    pub fn from_span_with_offset<W: World>(world: &W, span: Span, main_line_offset: usize) -> Option<Self> {
+    pub fn from_span_with_offset<W: World>(
+        world: &W,
+        span: Span,
+        main_line_offset: usize,
+    ) -> Option<Self> {
         let id = span.id()?;
         let source = world.source(id).ok()?;
         let range = source.range(span)?;
@@ -562,7 +566,15 @@ fn format_info_short(
     paint: &dyn Fn(&str) -> String,
 ) {
     if let (Some(path), Some(line), Some(col)) = (&info.path, info.line, info.column) {
-        _ = writeln!(output, "{}:{}:{}: {}: {}", path, line, col, paint(label), info.message);
+        _ = writeln!(
+            output,
+            "{}:{}:{}: {}: {}",
+            path,
+            line,
+            col,
+            paint(label),
+            info.message
+        );
     } else {
         _ = writeln!(output, "{}: {}", paint(label), info.message);
     }
@@ -580,10 +592,12 @@ fn format_info_rich(
     _ = writeln!(output, "{}: {}", paint(label), info.message);
 
     // Source snippet (if enabled and available)
-    if options.snippets && !info.source_lines.is_empty()
-        && let (Some(path), Some(line), Some(col)) = (&info.path, info.line, info.column) {
-            write_snippet_from_lines(output, path, line, col, &info.source_lines, paint);
-        }
+    if options.snippets
+        && !info.source_lines.is_empty()
+        && let (Some(path), Some(line), Some(col)) = (&info.path, info.line, info.column)
+    {
+        write_snippet_from_lines(output, path, line, col, &info.source_lines, paint);
+    }
 
     // Trace information (if enabled)
     if options.traces {
@@ -710,21 +724,20 @@ fn write_snippet_from_lines(
     }
 
     // Multi-line end marker
-    if is_multiline
-        && let Some(last) = lines.last() {
-            let end_col = last.highlight.map(|(_, e)| e).unwrap_or(0);
-            let dashes = gutter::DASH.repeat(end_col);
-            _ = writeln!(
-                output,
-                "{:>width$} {} {}{}{}",
-                "",
-                paint(gutter::BAR),
-                paint(gutter::SPAN_END),
-                paint(&dashes),
-                paint(gutter::MARKER),
-                width = line_num_width
-            );
-        }
+    if is_multiline && let Some(last) = lines.last() {
+        let end_col = last.highlight.map(|(_, e)| e).unwrap_or(0);
+        let dashes = gutter::DASH.repeat(end_col);
+        _ = writeln!(
+            output,
+            "{:>width$} {} {}{}{}",
+            "",
+            paint(gutter::BAR),
+            paint(gutter::SPAN_END),
+            paint(&dashes),
+            paint(gutter::MARKER),
+            width = line_num_width
+        );
+    }
 }
 
 /// Write trace info from pre-resolved TraceInfo.
@@ -732,9 +745,10 @@ fn write_trace_info(output: &mut String, trace: &TraceInfo, help_paint: &dyn Fn(
     _ = writeln!(output, "{}: {}", help_paint("help"), trace.message);
 
     if !trace.source_lines.is_empty()
-        && let (Some(path), Some(line), Some(col)) = (&trace.path, trace.line, trace.column) {
-            write_snippet_from_lines(output, path, line, col, &trace.source_lines, help_paint);
-        }
+        && let (Some(path), Some(line), Some(col)) = (&trace.path, trace.line, trace.column)
+    {
+        write_snippet_from_lines(output, path, line, col, &trace.source_lines, help_paint);
+    }
 }
 
 // ============================================================================
@@ -818,12 +832,7 @@ fn format_diagnostic_rich<W: World>(
     if options.hints {
         let help_paint = get_help_paint_fn(options);
         for hint in &diag.hints {
-            _ = writeln!(
-                output,
-                "  {} hint: {}",
-                help_paint("="),
-                hint
-            );
+            _ = writeln!(output, "  {} hint: {}", help_paint("="), hint);
         }
     }
 }
@@ -915,12 +924,7 @@ fn write_trace<W: World>(
         Tracepoint::Import => unreachable!(), // Handled above
     };
 
-    _ = writeln!(
-        output,
-        "{}: {}",
-        help_paint("help"),
-        message
-    );
+    _ = writeln!(output, "{}: {}", help_paint("help"), message);
 
     if let Some(location) = SpanLocation::from_span(world, span) {
         write_snippet(output, &location, help_paint);

@@ -2,11 +2,11 @@
 
 use std::fmt;
 
-use typst::diag::{Severity, SourceDiagnostic};
 use typst::World;
+use typst::diag::{Severity, SourceDiagnostic};
 
 use super::filter::DiagnosticFilter;
-use super::format::{format_info, DiagnosticOptions, SpanLocation};
+use super::format::{DiagnosticOptions, SpanLocation, format_info};
 
 // ============================================================================
 // DiagnosticSummary
@@ -188,9 +188,7 @@ impl Diagnostics {
 
     /// Iterate over errors only.
     pub fn errors(&self) -> impl Iterator<Item = &DiagnosticInfo> {
-        self.items
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
+        self.items.iter().filter(|d| d.severity == Severity::Error)
     }
 
     /// Iterate over warnings only.
@@ -265,7 +263,10 @@ impl Diagnostics {
             .collect();
 
         Self {
-            items: keep_indices.iter().map(|&i| self.items[i].clone()).collect(),
+            items: keep_indices
+                .iter()
+                .map(|&i| self.items[i].clone())
+                .collect(),
             raw: keep_indices
                 .iter()
                 .filter_map(|&i| self.raw.get(i).cloned())
@@ -296,7 +297,10 @@ impl Diagnostics {
             .collect();
 
         Self {
-            items: keep_indices.iter().map(|&i| self.items[i].clone()).collect(),
+            items: keep_indices
+                .iter()
+                .map(|&i| self.items[i].clone())
+                .collect(),
             raw: keep_indices.iter().map(|&i| self.raw[i].clone()).collect(),
         }
     }
@@ -307,10 +311,7 @@ impl Diagnostics {
     pub fn filter_external_packages(&self) -> Self {
         self.filter(|d| {
             // Keep if no path, or path doesn't start with @
-            d.path
-                .as_ref()
-                .map(|p| !p.starts_with('@'))
-                .unwrap_or(true)
+            d.path.as_ref().map(|p| !p.starts_with('@')).unwrap_or(true)
         })
     }
 }
@@ -436,7 +437,10 @@ pub struct DiagnosticInfo {
 impl DiagnosticInfo {
     /// Format with custom options.
     pub fn with_options<'a>(&'a self, options: DiagnosticOptions) -> DiagnosticInfoDisplay<'a> {
-        DiagnosticInfoDisplay { info: self, options }
+        DiagnosticInfoDisplay {
+            info: self,
+            options,
+        }
     }
 }
 
@@ -539,7 +543,10 @@ pub fn resolve_diagnostic_with_offset<W: World>(
                 path: loc.as_ref().map(|l| l.path.clone()),
                 line: loc.as_ref().map(|l| l.start_line),
                 column: loc.as_ref().map(|l| l.start_col + 1),
-                source_lines: loc.as_ref().map(|l| l.to_source_lines()).unwrap_or_default(),
+                source_lines: loc
+                    .as_ref()
+                    .map(|l| l.to_source_lines())
+                    .unwrap_or_default(),
             })
         })
         .collect();
@@ -574,12 +581,12 @@ pub fn resolve_diagnostics<W: World>(
 
 /// Count errors and warnings in a diagnostic list.
 pub fn count_diagnostics(diagnostics: &[SourceDiagnostic]) -> (usize, usize) {
-    diagnostics.iter().fold((0, 0), |(errors, warnings), d| {
-        match d.severity {
+    diagnostics
+        .iter()
+        .fold((0, 0), |(errors, warnings), d| match d.severity {
             Severity::Error => (errors + 1, warnings),
             Severity::Warning => (errors, warnings + 1),
-        }
-    })
+        })
 }
 
 /// Check if there are any errors in the diagnostics.
@@ -627,23 +634,43 @@ mod tests {
     #[test]
     fn test_diagnostic_summary_display() {
         assert_eq!(
-            DiagnosticSummary { errors: 0, warnings: 0 }.to_string(),
+            DiagnosticSummary {
+                errors: 0,
+                warnings: 0
+            }
+            .to_string(),
             "no diagnostics"
         );
         assert_eq!(
-            DiagnosticSummary { errors: 1, warnings: 0 }.to_string(),
+            DiagnosticSummary {
+                errors: 1,
+                warnings: 0
+            }
+            .to_string(),
             "1 error"
         );
         assert_eq!(
-            DiagnosticSummary { errors: 2, warnings: 0 }.to_string(),
+            DiagnosticSummary {
+                errors: 2,
+                warnings: 0
+            }
+            .to_string(),
             "2 errors"
         );
         assert_eq!(
-            DiagnosticSummary { errors: 0, warnings: 1 }.to_string(),
+            DiagnosticSummary {
+                errors: 0,
+                warnings: 1
+            }
+            .to_string(),
             "1 warning"
         );
         assert_eq!(
-            DiagnosticSummary { errors: 1, warnings: 2 }.to_string(),
+            DiagnosticSummary {
+                errors: 1,
+                warnings: 2
+            }
+            .to_string(),
             "1 error, 2 warnings"
         );
     }

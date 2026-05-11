@@ -9,7 +9,7 @@ use typst::syntax::{FileId, Source, VirtualPath};
 
 use super::path::normalize_path;
 use super::source::{read_source, read_source_with_injection};
-use crate::resource::file::{file_id_from_path, FileResolver};
+use crate::resource::file::{FileResolver, file_id_from_path};
 
 /// Error when building a file snapshot.
 #[derive(Debug)]
@@ -270,7 +270,7 @@ fn load_source_with_injection(
 // ============================================================================
 
 fn parse_imports(source: &Source) -> Vec<FileId> {
-    use typst::syntax::{ast, SyntaxKind};
+    use typst::syntax::{SyntaxKind, ast};
 
     let mut imports = Vec::new();
     let mut stack = vec![source.root().clone()];
@@ -280,15 +280,17 @@ fn parse_imports(source: &Source) -> Vec<FileId> {
         match node.kind() {
             SyntaxKind::ModuleImport => {
                 if let Some(import) = node.cast::<ast::ModuleImport>()
-                    && let Some(id) = resolve_import_path(&import.source(), current) {
-                        imports.push(id);
-                    }
+                    && let Some(id) = resolve_import_path(&import.source(), current)
+                {
+                    imports.push(id);
+                }
             }
             SyntaxKind::ModuleInclude => {
                 if let Some(include) = node.cast::<ast::ModuleInclude>()
-                    && let Some(id) = resolve_import_path(&include.source(), current) {
-                        imports.push(id);
-                    }
+                    && let Some(id) = resolve_import_path(&include.source(), current)
+                {
+                    imports.push(id);
+                }
             }
             _ => stack.extend(node.children().cloned()),
         }

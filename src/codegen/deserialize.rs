@@ -1,17 +1,17 @@
 //! JSON → Typst deserialization.
 
 use serde_json::{Map, Value as JsonValue};
+use typst::Library;
 use typst::comemo::Tracked;
 use typst::ecow::EcoVec;
 use typst::engine::Engine;
-use typst::foundations::{Arg, Args, CastInfo, Content, Context, Dict, Func, Str, Value};
 use typst::foundations::SymbolElem;
+use typst::foundations::{Arg, Args, CastInfo, Content, Context, Dict, Func, Str, Value};
 use typst::syntax::{Span, Spanned};
 use typst::text::{SpaceElem, TextElem};
-use typst::Library;
 
 use super::error::ConvertError;
-use super::literal::{parse_typst_literal, parse_length, parse_angle, parse_ratio, parse_color};
+use super::literal::{parse_angle, parse_color, parse_length, parse_ratio, parse_typst_literal};
 use super::lookup::{find_element_funcs, find_element_in_scope};
 
 /// Convert JSON to Typst Content.
@@ -48,7 +48,9 @@ fn json_to_content_with_ancestors(
     json: &JsonValue,
     ancestors: &[Func],
 ) -> Result<Content, ConvertError> {
-    let obj = json.as_object().ok_or(ConvertError::NotObject(json_type_name(json)))?;
+    let obj = json
+        .as_object()
+        .ok_or(ConvertError::NotObject(json_type_name(json)))?;
     let func_name = obj
         .get("func")
         .and_then(|v| v.as_str())
@@ -110,7 +112,11 @@ fn json_to_content_with_ancestors(
     func.call(engine, context, args)
         .map_err(|e| ConvertError::CallFailed {
             func: func_name.to_string(),
-            reason: e.iter().map(|d| d.message.to_string()).collect::<Vec<_>>().join("; "),
+            reason: e
+                .iter()
+                .map(|d| d.message.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
         })?
         .cast::<Content>()
         .map_err(|_| ConvertError::CallFailed {
@@ -161,7 +167,9 @@ fn json_to_value_with_ancestors(
             if let Some(i) = n.as_i64() {
                 Ok(Value::Int(i))
             } else {
-                Ok(Value::Float(n.as_f64().ok_or(ConvertError::ValueConversion)?))
+                Ok(Value::Float(
+                    n.as_f64().ok_or(ConvertError::ValueConversion)?,
+                ))
             }
         }
         JsonValue::String(s) => {
@@ -186,14 +194,16 @@ fn json_to_value_with_ancestors(
 
             // Check for Content marker: {"func": "..."}
             if obj.contains_key("func") {
-                let content = json_to_content_with_ancestors(engine, context, library, json, ancestors)?;
+                let content =
+                    json_to_content_with_ancestors(engine, context, library, json, ancestors)?;
                 Ok(Value::Content(content))
             } else {
                 // Regular Dict
                 let dict: Result<Dict, _> = obj
                     .iter()
                     .map(|(k, v)| {
-                        let value = json_to_value_with_ancestors(engine, context, library, v, ancestors)?;
+                        let value =
+                            json_to_value_with_ancestors(engine, context, library, v, ancestors)?;
                         Ok((Str::from(k.as_str()), value))
                     })
                     .collect();
@@ -213,30 +223,38 @@ fn parse_typed_value(type_tag: &str, obj: &Map<String, JsonValue>) -> Result<Val
         .ok_or(ConvertError::MissingField("value"))?;
 
     match type_tag {
-        "length" => parse_length(value_str)
-            .map(Value::Length)
-            .ok_or_else(|| ConvertError::InvalidLiteral {
-                type_name: "length",
-                value: value_str.to_string(),
-            }),
-        "angle" => parse_angle(value_str)
-            .map(Value::Angle)
-            .ok_or_else(|| ConvertError::InvalidLiteral {
-                type_name: "angle",
-                value: value_str.to_string(),
-            }),
-        "ratio" => parse_ratio(value_str)
-            .map(Value::Ratio)
-            .ok_or_else(|| ConvertError::InvalidLiteral {
-                type_name: "ratio",
-                value: value_str.to_string(),
-            }),
-        "color" => parse_color(value_str)
-            .map(Value::Color)
-            .ok_or_else(|| ConvertError::InvalidLiteral {
-                type_name: "color",
-                value: value_str.to_string(),
-            }),
+        "length" => {
+            parse_length(value_str)
+                .map(Value::Length)
+                .ok_or_else(|| ConvertError::InvalidLiteral {
+                    type_name: "length",
+                    value: value_str.to_string(),
+                })
+        }
+        "angle" => {
+            parse_angle(value_str)
+                .map(Value::Angle)
+                .ok_or_else(|| ConvertError::InvalidLiteral {
+                    type_name: "angle",
+                    value: value_str.to_string(),
+                })
+        }
+        "ratio" => {
+            parse_ratio(value_str)
+                .map(Value::Ratio)
+                .ok_or_else(|| ConvertError::InvalidLiteral {
+                    type_name: "ratio",
+                    value: value_str.to_string(),
+                })
+        }
+        "color" => {
+            parse_color(value_str)
+                .map(Value::Color)
+                .ok_or_else(|| ConvertError::InvalidLiteral {
+                    type_name: "color",
+                    value: value_str.to_string(),
+                })
+        }
         "str" | "string" => {
             // Explicit string - do NOT parse as literal
             Ok(Value::Str(value_str.into()))
@@ -273,10 +291,7 @@ fn build_args(
     new_ancestors.push(func.clone());
 
     // Collect positional-only parameters in order
-    let positional_only: Vec<_> = params
-        .iter()
-        .filter(|p| p.positional && !p.named)
-        .collect();
+    let positional_only: Vec<_> = params.iter().filter(|p| p.positional && !p.named).collect();
 
     // First, handle positional-only parameters (must be in order)
     for param in &positional_only {
@@ -286,7 +301,11 @@ fn build_args(
                 if let Some(arr) = value.as_array() {
                     for item in arr {
                         let typst_value = json_to_value_with_ancestors(
-                            engine, context, library, item, &new_ancestors,
+                            engine,
+                            context,
+                            library,
+                            item,
+                            &new_ancestors,
                         )?;
                         items.push(Arg {
                             span,
@@ -296,7 +315,11 @@ fn build_args(
                     }
                 } else {
                     let typst_value = json_to_value_with_ancestors(
-                        engine, context, library, value, &new_ancestors,
+                        engine,
+                        context,
+                        library,
+                        value,
+                        &new_ancestors,
                     )?;
                     items.push(Arg {
                         span,
@@ -305,9 +328,8 @@ fn build_args(
                     });
                 }
             } else {
-                let typst_value = json_to_value_with_ancestors(
-                    engine, context, library, value, &new_ancestors,
-                )?;
+                let typst_value =
+                    json_to_value_with_ancestors(engine, context, library, value, &new_ancestors)?;
                 items.push(Arg {
                     span,
                     name: None,
@@ -340,25 +362,31 @@ fn build_args(
         // Check if this is a variadic parameter
         let param = params.iter().find(|p| p.name == key);
         if let Some(param) = param
-            && param.variadic {
-                // Expand variadic into multiple positional args
-                if let Some(arr) = value.as_array() {
-                    for item in arr {
-                        let typst_value = json_to_value_with_ancestors(
-                            engine, context, library, item, &new_ancestors,
-                        )?;
-                        items.push(Arg {
-                            span,
-                            name: None,
-                            value: Spanned::new(typst_value, span),
-                        });
-                    }
-                    continue;
+            && param.variadic
+        {
+            // Expand variadic into multiple positional args
+            if let Some(arr) = value.as_array() {
+                for item in arr {
+                    let typst_value = json_to_value_with_ancestors(
+                        engine,
+                        context,
+                        library,
+                        item,
+                        &new_ancestors,
+                    )?;
+                    items.push(Arg {
+                        span,
+                        name: None,
+                        value: Spanned::new(typst_value, span),
+                    });
                 }
+                continue;
             }
+        }
 
         // Regular named argument
-        let typst_value = json_to_value_with_ancestors(engine, context, library, value, &new_ancestors)?;
+        let typst_value =
+            json_to_value_with_ancestors(engine, context, library, value, &new_ancestors)?;
         items.push(Arg {
             span,
             name: Some(Str::from(key.as_str())),
@@ -372,12 +400,10 @@ fn build_args(
 /// Check if a parameter's type accepts `none`.
 fn param_accepts_none(param: &typst::foundations::ParamInfo) -> bool {
     let mut accepts_none = false;
-    param.input.walk(|info| {
-        match info {
-            CastInfo::Any => accepts_none = true,
-            CastInfo::Type(ty) if ty.short_name() == "none" => accepts_none = true,
-            _ => {}
-        }
+    param.input.walk(|info| match info {
+        CastInfo::Any => accepts_none = true,
+        CastInfo::Type(ty) if ty.short_name() == "none" => accepts_none = true,
+        _ => {}
     });
     accepts_none
 }
@@ -411,25 +437,23 @@ fn find_best_matching_element(
     // Score each candidate based on how well its parameters match the JSON fields
     let json_fields: std::collections::HashSet<_> = obj.keys().filter(|k| *k != "func").collect();
 
-    candidates
-        .into_iter()
-        .max_by_key(|func| {
-            let params = func.params().unwrap_or_default();
-            let param_names: std::collections::HashSet<_> = params.iter().map(|p| p.name).collect();
+    candidates.into_iter().max_by_key(|func| {
+        let params = func.params().unwrap_or_default();
+        let param_names: std::collections::HashSet<_> = params.iter().map(|p| p.name).collect();
 
-            // Count how many JSON fields match parameter names
-            let matches = json_fields
-                .iter()
-                .filter(|f| param_names.contains(f.as_str()))
-                .count();
+        // Count how many JSON fields match parameter names
+        let matches = json_fields
+            .iter()
+            .filter(|f| param_names.contains(f.as_str()))
+            .count();
 
-            // Penalize if there are required params not in JSON
-            let missing_required = params
-                .iter()
-                .filter(|p| p.required && !json_fields.contains(&p.name.to_string()))
-                .count();
+        // Penalize if there are required params not in JSON
+        let missing_required = params
+            .iter()
+            .filter(|p| p.required && !json_fields.contains(&p.name.to_string()))
+            .count();
 
-            // Score: matches - missing_required
-            (matches as i32) - (missing_required as i32)
-        })
+        // Score: matches - missing_required
+        (matches as i32) - (missing_required as i32)
+    })
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use typst::diag::FileResult;
 use typst::syntax::{FileId, Source};
 
-use crate::resource::file::{decode_utf8, FileResolver};
+use crate::resource::file::{FileResolver, decode_utf8};
 
 /// Read a source file without injecting prelude/postlude.
 pub(crate) fn read_source(id: FileId, root: &Path, files: &FileResolver) -> FileResult<Source> {

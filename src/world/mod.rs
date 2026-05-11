@@ -4,8 +4,8 @@ mod builder;
 mod cache;
 mod core;
 mod path;
-mod source;
 mod snapshot;
+mod source;
 mod strategy;
 
 pub use builder::WorldBuilder;

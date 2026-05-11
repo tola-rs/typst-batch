@@ -77,7 +77,13 @@ fn content() {
 
     env.run(|engine, context, library| {
         // Object with "func" becomes Content
-        let v = json_to_value(engine, context, library, &json!({"func": "text", "text": "hi"})).unwrap();
+        let v = json_to_value(
+            engine,
+            context,
+            library,
+            &json!({"func": "text", "text": "hi"}),
+        )
+        .unwrap();
         assert!(matches!(v, Value::Content(_)));
     });
 }
@@ -87,21 +93,18 @@ fn content() {
 fn content_in_sys_inputs() {
     use std::fs;
     use tempfile::TempDir;
+    use typst::foundations::Content;
     use typst::foundations::{Dict, IntoValue};
     use typst::text::TextElem;
-    use typst::foundations::Content;
 
     use std::sync::Arc;
 
+    use crate::process::compile::compile_with_world;
     use crate::resource::font::FontStore;
     use crate::world::TypstWorld;
-    use crate::process::compile::compile_with_world;
 
     // Create Content: "Hello World"
-    let content = Content::sequence([
-        TextElem::packed("Hello "),
-        TextElem::packed("World"),
-    ]);
+    let content = Content::sequence([TextElem::packed("Hello "), TextElem::packed("World")]);
 
     // Put Content in sys.inputs
     let mut inputs = Dict::new();
@@ -110,10 +113,14 @@ fn content_in_sys_inputs() {
     // Create temp file
     let dir = TempDir::new().unwrap();
     let file = dir.path().join("test.typ");
-    fs::write(&file, r#"
+    fs::write(
+        &file,
+        r#"
         #let greeting = sys.inputs.greeting
         #greeting
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // Build world with custom inputs
     let world = TypstWorld::builder(&file, dir.path())
@@ -144,16 +151,16 @@ fn content_in_sys_inputs() {
 /// - Compile Typst file that uses the injected Content
 #[test]
 fn json_to_content_then_inject() {
+    use serde_json::json;
     use std::fs;
     use std::sync::Arc;
     use tempfile::TempDir;
-    use serde_json::json;
     use typst::foundations::{Dict, IntoValue};
 
     use crate::codegen::json_to_content;
+    use crate::process::compile::compile_with_world;
     use crate::resource::font::FontStore;
     use crate::world::TypstWorld;
-    use crate::process::compile::compile_with_world;
 
     // Create a temporary World for json_to_content()
     let dir = TempDir::new().unwrap();
@@ -167,11 +174,11 @@ fn json_to_content_then_inject() {
 
     // Use TestEnv-style Engine creation to call json_to_content()
     let content = {
+        use typst::World;
         use typst::comemo::Track;
         use typst::engine::{Engine, Route, Sink, Traced};
         use typst::foundations::Context;
         use typst::introspection::Introspector;
-        use typst::World;
 
         let introspector = Introspector::default();
         let traced = Traced::default();
@@ -209,10 +216,14 @@ fn json_to_content_then_inject() {
 
     // Create actual file to compile
     let real_file = dir.path().join("test.typ");
-    fs::write(&real_file, r#"
+    fs::write(
+        &real_file,
+        r#"
         #let summary = sys.inputs.summary
         Summary: #summary
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // Build world with inputs and compile
     let world = TypstWorld::builder(&real_file, dir.path())
@@ -230,7 +241,9 @@ fn json_to_content_then_inject() {
 
     // Should contain the text and the link
     assert!(
-        html_str.contains("Check out") && html_str.contains("this link") && html_str.contains("example.com"),
+        html_str.contains("Check out")
+            && html_str.contains("this link")
+            && html_str.contains("example.com"),
         "Output should contain the summary with link, got: {}",
         html_str
     );

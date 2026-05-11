@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use typst::utils::LazyHash;
 use typst::Library;
+use typst::utils::LazyHash;
 
 use super::cache::LocalFileCache;
 use super::snapshot::SourceSnapshot;
@@ -50,10 +50,7 @@ impl FileCacheMode {
         snapshot: Arc<SourceSnapshot>,
         fallback: Arc<SharedFileCache>,
     ) -> Self {
-        Self::Snapshot {
-            snapshot,
-            fallback,
-        }
+        Self::Snapshot { snapshot, fallback }
     }
 }
 

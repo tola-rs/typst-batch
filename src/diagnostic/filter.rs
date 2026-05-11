@@ -24,7 +24,12 @@ impl PackageKind {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        Self::Specific(packages.into_iter().map(|s| s.as_ref().to_string()).collect())
+        Self::Specific(
+            packages
+                .into_iter()
+                .map(|s| s.as_ref().to_string())
+                .collect(),
+        )
     }
 
     /// Check if a diagnostic matches this package filter.
@@ -59,9 +64,9 @@ impl FilterType {
     fn matches(&self, diag: &SourceDiagnostic) -> bool {
         match self {
             FilterType::All => true,
-            FilterType::HtmlExport => {
-                diag.message.contains("html export is under active development")
-            }
+            FilterType::HtmlExport => diag
+                .message
+                .contains("html export is under active development"),
             FilterType::Package(kind) => kind.matches(diag),
             FilterType::MessageContains(text) => diag.message.contains(text.as_str()),
         }
@@ -129,10 +134,7 @@ mod tests {
     fn test_filter_html_warnings() {
         let diags = vec![
             SourceDiagnostic::error(Span::detached(), "error 1"),
-            SourceDiagnostic::warning(
-                Span::detached(),
-                "html export is under active development",
-            ),
+            SourceDiagnostic::warning(Span::detached(), "html export is under active development"),
             SourceDiagnostic::warning(Span::detached(), "other warning"),
         ];
 
@@ -163,7 +165,10 @@ mod tests {
             SourceDiagnostic::error(Span::detached(), "other error"),
         ];
 
-        let filter = DiagnosticFilter::new(Severity::Error, FilterType::MessageContains("keyword".into()));
+        let filter = DiagnosticFilter::new(
+            Severity::Error,
+            FilterType::MessageContains("keyword".into()),
+        );
         let filtered: Vec<_> = diags.iter().filter(|d| !filter.matches(d)).collect();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].message, "other error");

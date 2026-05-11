@@ -1,8 +1,8 @@
 //! Compilation error type.
 
 use thiserror::Error;
-use typst::diag::SourceDiagnostic;
 use typst::World;
+use typst::diag::SourceDiagnostic;
 
 use super::info::Diagnostics;
 use crate::world::SnapshotError;
@@ -66,7 +66,8 @@ impl CompileError {
         raw_diagnostics: Vec<SourceDiagnostic>,
         main_line_offset: usize,
     ) -> Self {
-        let diagnostics = Diagnostics::resolve_with_offset(world, &raw_diagnostics, main_line_offset);
+        let diagnostics =
+            Diagnostics::resolve_with_offset(world, &raw_diagnostics, main_line_offset);
         Self::Compilation { diagnostics }
     }
 

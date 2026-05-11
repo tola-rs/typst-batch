@@ -83,16 +83,18 @@ pub fn parse_length(s: &str) -> Option<Length> {
         ("in", 72.0),
     ] {
         if let Some(num_str) = s.strip_suffix(suffix)
-            && let Ok(n) = num_str.trim().parse::<f64>() {
-                return Some(Abs::pt(n * factor).into());
-            }
+            && let Ok(n) = num_str.trim().parse::<f64>()
+        {
+            return Some(Abs::pt(n * factor).into());
+        }
     }
 
     // Relative unit: em
     if let Some(num_str) = s.strip_suffix("em")
-        && let Ok(n) = num_str.trim().parse::<f64>() {
-            return Some(Em::new(n).into());
-        }
+        && let Ok(n) = num_str.trim().parse::<f64>()
+    {
+        return Some(Em::new(n).into());
+    }
 
     None
 }
@@ -110,20 +112,23 @@ pub fn parse_angle(s: &str) -> Option<Angle> {
     let s = s.trim();
 
     if let Some(num_str) = s.strip_suffix("deg")
-        && let Ok(n) = num_str.trim().parse::<f64>() {
-            return Some(Angle::deg(n));
-        }
+        && let Ok(n) = num_str.trim().parse::<f64>()
+    {
+        return Some(Angle::deg(n));
+    }
 
     if let Some(num_str) = s.strip_suffix("rad")
-        && let Ok(n) = num_str.trim().parse::<f64>() {
-            return Some(Angle::rad(n));
-        }
+        && let Ok(n) = num_str.trim().parse::<f64>()
+    {
+        return Some(Angle::rad(n));
+    }
 
     if let Some(num_str) = s.strip_suffix("turn")
-        && let Ok(n) = num_str.trim().parse::<f64>() {
-            // 1 turn = 360 degrees
-            return Some(Angle::deg(n * 360.0));
-        }
+        && let Ok(n) = num_str.trim().parse::<f64>()
+    {
+        // 1 turn = 360 degrees
+        return Some(Angle::deg(n * 360.0));
+    }
 
     None
 }
@@ -141,9 +146,10 @@ pub fn parse_ratio(s: &str) -> Option<Ratio> {
     let s = s.trim();
 
     if let Some(num_str) = s.strip_suffix('%')
-        && let Ok(n) = num_str.trim().parse::<f64>() {
-            return Some(Ratio::new(n / 100.0));
-        }
+        && let Ok(n) = num_str.trim().parse::<f64>()
+    {
+        return Some(Ratio::new(n / 100.0));
+    }
 
     None
 }

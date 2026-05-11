@@ -34,11 +34,8 @@ impl DictBuilder {
         K: AsRef<str>,
         V: IntoValue,
     {
-        self.fields.push(format!(
-            "{}: {}",
-            key.as_ref(),
-            value.into_value().repr()
-        ));
+        self.fields
+            .push(format!("{}: {}", key.as_ref(), value.into_value().repr()));
         self
     }
 
@@ -86,8 +83,6 @@ impl DictBuilder {
         format!("({})", self.fields.join(", "))
     }
 }
-
-
 
 /// Build a Typst dictionary from entries.
 pub fn dict<I, K, V>(entries: I) -> String

@@ -1,7 +1,7 @@
 //! Function lookup utilities for JSON → Typst conversion.
 
-use typst::foundations::{Func, Module};
 use typst::Library;
+use typst::foundations::{Func, Module};
 
 /// Find all element functions with the given name.
 ///

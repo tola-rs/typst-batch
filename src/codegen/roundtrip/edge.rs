@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::codegen::{content_to_json, json_to_content};
 
-use super::common::{assert_typst_roundtrip, TestEnv};
+use super::common::{TestEnv, assert_typst_roundtrip};
 
 #[test]
 fn deeply_nested() {
@@ -22,7 +22,9 @@ fn invalid_json() {
         assert!(json_to_content(engine, context, library, &json!({"text": "hello"})).is_err());
 
         // Unknown function
-        assert!(json_to_content(engine, context, library, &json!({"func": "nonexistent"})).is_err());
+        assert!(
+            json_to_content(engine, context, library, &json!({"func": "nonexistent"})).is_err()
+        );
 
         // Not an object
         assert!(json_to_content(engine, context, library, &json!("string")).is_err());
