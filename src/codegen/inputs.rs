@@ -10,7 +10,8 @@ use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{Array, Context, Dict, IntoValue, Value};
 use typst::introspection::Introspector;
 
-use super::{ConvertError, json_to_content};
+use super::ConvertError;
+use super::deserialize::{field_path, index_path, json_to_content_at};
 use crate::world::TypstWorld;
 
 /// Opaque inputs type for `sys.inputs` injection.
@@ -100,7 +101,7 @@ impl Inputs {
         match json {
             JsonValue::Object(_) => {
                 let converter = ContentConverter::new(root);
-                let dict = converter.convert_dict(json)?;
+                let dict = converter.convert_dict(json, "")?;
                 Ok(Self { dict })
             }
             _ => Err(ConvertError::Other("inputs must be a JSON object".into())),
@@ -198,7 +199,7 @@ impl ContentConverter {
         }
     }
 
-    fn convert_value(&self, json: &JsonValue) -> Result<Value, ConvertError> {
+    fn convert_value(&self, json: &JsonValue, path: &str) -> Result<Value, ConvertError> {
         match json {
             JsonValue::Null => Ok(Value::None),
             JsonValue::Bool(b) => Ok(b.into_value()),
@@ -208,41 +209,46 @@ impl ContentConverter {
                 } else if let Some(f) = n.as_f64() {
                     Ok(f.into_value())
                 } else {
-                    Err(ConvertError::Other(format!("unsupported number: {n}")))
+                    Err(ConvertError::Other(format!(
+                        "unsupported number at input path `{path}`: {n}"
+                    )))
                 }
             }
             JsonValue::String(s) => Ok(s.as_str().into_value()),
             JsonValue::Array(arr) => {
                 let mut result = Array::new();
-                for item in arr {
-                    result.push(self.convert_value(item)?);
+                for (index, item) in arr.iter().enumerate() {
+                    result.push(self.convert_value(item, &index_path(path, index))?);
                 }
                 Ok(result.into_value())
             }
             JsonValue::Object(obj) => {
                 // Check if this is Typst Content (has "func" field)
                 if obj.contains_key("func") {
-                    self.rebuild_content(json)
+                    self.rebuild_content(json, path)
                 } else {
-                    Ok(self.convert_dict(json)?.into_value())
+                    Ok(self.convert_dict(json, path)?.into_value())
                 }
             }
         }
     }
 
-    fn convert_dict(&self, json: &JsonValue) -> Result<Dict, ConvertError> {
+    fn convert_dict(&self, json: &JsonValue, path: &str) -> Result<Dict, ConvertError> {
         let obj = json
             .as_object()
             .ok_or_else(|| ConvertError::Other("expected JSON object".into()))?;
 
         let mut dict = Dict::new();
         for (key, value) in obj {
-            dict.insert(key.as_str().into(), self.convert_value(value)?);
+            dict.insert(
+                key.as_str().into(),
+                self.convert_value(value, &field_path(path, key))?,
+            );
         }
         Ok(dict)
     }
 
-    fn rebuild_content(&self, json: &JsonValue) -> Result<Value, ConvertError> {
+    fn rebuild_content(&self, json: &JsonValue, path: &str) -> Result<Value, ConvertError> {
         let introspector = Introspector::default();
         let traced = Traced::default();
         let mut sink = Sink::new();
@@ -259,7 +265,7 @@ impl ContentConverter {
         let library = self.world.library();
         let context = Context::none();
 
-        let content = json_to_content(&mut engine, context.track(), library, json)?;
+        let content = json_to_content_at(&mut engine, context.track(), library, json, path)?;
         Ok(content.into_value())
     }
 }
@@ -422,5 +428,29 @@ mod tests {
         let summary = inputs.dict.get(&Str::from("summary")).unwrap();
         // Should be Content, not Dict
         assert!(summary.clone().cast::<Dict>().is_err());
+    }
+
+    #[test]
+    fn test_from_json_with_content_reports_unsupported_path() {
+        let dir = TempDir::new().unwrap();
+        let json = json!({
+            "pages": [
+                {
+                    "permalink": "/a/",
+                    "summary": {"func": "context"}
+                }
+            ]
+        });
+
+        let err = match Inputs::from_json_with_content(&json, dir.path()) {
+            Ok(_) => panic!("context content should be unsupported"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            ConvertError::Unsupported { path, func }
+                if path == "/pages/0/summary" && func == "context"
+        ));
     }
 }

@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::codegen::{content_to_json, json_to_content};
+use crate::codegen::{ConvertError, content_to_json, json_to_content};
 
 use super::common::{TestEnv, assert_typst_roundtrip};
 
@@ -21,15 +21,44 @@ fn invalid_json() {
         // Missing "func" field
         assert!(json_to_content(engine, context, library, &json!({"text": "hello"})).is_err());
 
-        // Unknown function
-        assert!(
-            json_to_content(engine, context, library, &json!({"func": "nonexistent"})).is_err()
-        );
+        // Unsupported function
+        let err = json_to_content(engine, context, library, &json!({"func": "nonexistent"}))
+            .expect_err("nonexistent should be unsupported");
+        assert!(matches!(
+            err,
+            ConvertError::Unsupported { path, func } if path == "/" && func == "nonexistent"
+        ));
 
         // Not an object
         assert!(json_to_content(engine, context, library, &json!("string")).is_err());
         assert!(json_to_content(engine, context, library, &json!(123)).is_err());
         assert!(json_to_content(engine, context, library, &json!(null)).is_err());
+    });
+}
+
+#[test]
+fn unsupported_content() {
+    let env = TestEnv::new();
+
+    env.run(|engine, context, library| {
+        let err = json_to_content(engine, context, library, &json!({"func": "context"}))
+            .expect_err("context should be unsupported");
+        assert!(matches!(
+            err,
+            ConvertError::Unsupported { path, func } if path == "/" && func == "context"
+        ));
+
+        let err = json_to_content(
+            engine,
+            context,
+            library,
+            &json!({"func": "state-update", "key": "preview"}),
+        )
+        .expect_err("state-update should be unsupported");
+        assert!(matches!(
+            err,
+            ConvertError::Unsupported { path, func } if path == "/" && func == "state-update"
+        ));
     });
 }
 

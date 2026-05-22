@@ -33,7 +33,17 @@ pub fn json_to_content(
     library: &Library,
     json: &JsonValue,
 ) -> Result<Content, ConvertError> {
-    json_to_content_with_ancestors(engine, context, library, json, &[])
+    json_to_content_at(engine, context, library, json, "/")
+}
+
+pub(super) fn json_to_content_at(
+    engine: &mut Engine,
+    context: Tracked<Context>,
+    library: &Library,
+    json: &JsonValue,
+    path: &str,
+) -> Result<Content, ConvertError> {
+    json_to_content_with_ancestors(engine, context, library, json, &[], path)
 }
 
 /// Convert JSON to Typst Content with ancestor context.
@@ -47,6 +57,7 @@ fn json_to_content_with_ancestors(
     library: &Library,
     json: &JsonValue,
     ancestors: &[Func],
+    path: &str,
 ) -> Result<Content, ConvertError> {
     let obj = json
         .as_object()
@@ -83,7 +94,17 @@ fn json_to_content_with_ancestors(
                 .ok_or(ConvertError::MissingField("children"))?;
             let contents: Result<Vec<Content>, _> = children
                 .iter()
-                .map(|c| json_to_content_with_ancestors(engine, context, library, c, ancestors))
+                .enumerate()
+                .map(|(index, c)| {
+                    json_to_content_with_ancestors(
+                        engine,
+                        context,
+                        library,
+                        c,
+                        ancestors,
+                        &index_path(&field_path(path, "children"), index),
+                    )
+                })
                 .collect();
             return Ok(Content::sequence(contents?));
         }
@@ -93,7 +114,14 @@ fn json_to_content_with_ancestors(
             let child = obj
                 .get("child")
                 .ok_or(ConvertError::MissingField("child"))?;
-            return json_to_content_with_ancestors(engine, context, library, child, ancestors);
+            return json_to_content_with_ancestors(
+                engine,
+                context,
+                library,
+                child,
+                ancestors,
+                &field_path(path, "child"),
+            );
         }
         _ => {}
     }
@@ -105,9 +133,12 @@ fn json_to_content_with_ancestors(
         .find_map(|ancestor| find_element_in_scope(ancestor, func_name))
         // Fall back to global lookup with field-based disambiguation
         .or_else(|| find_best_matching_element(library, func_name, obj))
-        .ok_or_else(|| ConvertError::UnknownElement(func_name.to_string()))?;
+        .ok_or_else(|| ConvertError::Unsupported {
+            path: path.to_string(),
+            func: func_name.to_string(),
+        })?;
 
-    let args = build_args(&func, obj, engine, context, library, ancestors)?;
+    let args = build_args(&func, obj, engine, context, library, ancestors, path)?;
 
     func.call(engine, context, args)
         .map_err(|e| ConvertError::CallFailed {
@@ -137,7 +168,7 @@ pub fn json_to_value(
     library: &Library,
     json: &JsonValue,
 ) -> Result<Value, ConvertError> {
-    json_to_value_with_ancestors(engine, context, library, json, &[])
+    json_to_value_with_ancestors(engine, context, library, json, &[], "/")
 }
 
 /// Convert JSON to Typst Value with ancestor context.
@@ -159,6 +190,7 @@ fn json_to_value_with_ancestors(
     library: &Library,
     json: &JsonValue,
     ancestors: &[Func],
+    path: &str,
 ) -> Result<Value, ConvertError> {
     match json {
         JsonValue::Null => Ok(Value::None),
@@ -182,7 +214,17 @@ fn json_to_value_with_ancestors(
         JsonValue::Array(arr) => {
             let items: Result<Vec<Value>, _> = arr
                 .iter()
-                .map(|v| json_to_value_with_ancestors(engine, context, library, v, ancestors))
+                .enumerate()
+                .map(|(index, v)| {
+                    json_to_value_with_ancestors(
+                        engine,
+                        context,
+                        library,
+                        v,
+                        ancestors,
+                        &index_path(path, index),
+                    )
+                })
                 .collect();
             Ok(Value::Array(items?.into_iter().collect()))
         }
@@ -194,16 +236,23 @@ fn json_to_value_with_ancestors(
 
             // Check for Content marker: {"func": "..."}
             if obj.contains_key("func") {
-                let content =
-                    json_to_content_with_ancestors(engine, context, library, json, ancestors)?;
+                let content = json_to_content_with_ancestors(
+                    engine, context, library, json, ancestors, path,
+                )?;
                 Ok(Value::Content(content))
             } else {
                 // Regular Dict
                 let dict: Result<Dict, _> = obj
                     .iter()
                     .map(|(k, v)| {
-                        let value =
-                            json_to_value_with_ancestors(engine, context, library, v, ancestors)?;
+                        let value = json_to_value_with_ancestors(
+                            engine,
+                            context,
+                            library,
+                            v,
+                            ancestors,
+                            &field_path(path, k),
+                        )?;
                         Ok((Str::from(k.as_str()), value))
                     })
                     .collect();
@@ -280,6 +329,7 @@ fn build_args(
     context: Tracked<Context>,
     library: &Library,
     ancestors: &[Func],
+    path: &str,
 ) -> Result<Args, ConvertError> {
     let span = Span::detached();
     let mut items: EcoVec<Arg> = EcoVec::new();
@@ -296,16 +346,18 @@ fn build_args(
     // First, handle positional-only parameters (must be in order)
     for param in &positional_only {
         if let Some(value) = obj.get(param.name) {
+            let value_path = field_path(path, param.name);
             if param.variadic {
                 // Expand variadic into multiple positional args
                 if let Some(arr) = value.as_array() {
-                    for item in arr {
+                    for (index, item) in arr.iter().enumerate() {
                         let typst_value = json_to_value_with_ancestors(
                             engine,
                             context,
                             library,
                             item,
                             &new_ancestors,
+                            &index_path(&value_path, index),
                         )?;
                         items.push(Arg {
                             span,
@@ -320,6 +372,7 @@ fn build_args(
                         library,
                         value,
                         &new_ancestors,
+                        &value_path,
                     )?;
                     items.push(Arg {
                         span,
@@ -328,8 +381,14 @@ fn build_args(
                     });
                 }
             } else {
-                let typst_value =
-                    json_to_value_with_ancestors(engine, context, library, value, &new_ancestors)?;
+                let typst_value = json_to_value_with_ancestors(
+                    engine,
+                    context,
+                    library,
+                    value,
+                    &new_ancestors,
+                    &value_path,
+                )?;
                 items.push(Arg {
                     span,
                     name: None,
@@ -359,6 +418,8 @@ fn build_args(
             continue;
         }
 
+        let value_path = field_path(path, key);
+
         // Check if this is a variadic parameter
         let param = params.iter().find(|p| p.name == key);
         if let Some(param) = param
@@ -366,13 +427,14 @@ fn build_args(
         {
             // Expand variadic into multiple positional args
             if let Some(arr) = value.as_array() {
-                for item in arr {
+                for (index, item) in arr.iter().enumerate() {
                     let typst_value = json_to_value_with_ancestors(
                         engine,
                         context,
                         library,
                         item,
                         &new_ancestors,
+                        &index_path(&value_path, index),
                     )?;
                     items.push(Arg {
                         span,
@@ -385,8 +447,14 @@ fn build_args(
         }
 
         // Regular named argument
-        let typst_value =
-            json_to_value_with_ancestors(engine, context, library, value, &new_ancestors)?;
+        let typst_value = json_to_value_with_ancestors(
+            engine,
+            context,
+            library,
+            value,
+            &new_ancestors,
+            &value_path,
+        )?;
         items.push(Arg {
             span,
             name: Some(Str::from(key.as_str())),
@@ -417,6 +485,26 @@ fn json_type_name(json: &JsonValue) -> &'static str {
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",
     }
+}
+
+pub(super) fn field_path(parent: &str, key: &str) -> String {
+    child_path(parent, &escape_path_segment(key))
+}
+
+pub(super) fn index_path(parent: &str, index: usize) -> String {
+    child_path(parent, &index.to_string())
+}
+
+fn child_path(parent: &str, segment: &str) -> String {
+    if parent.is_empty() || parent == "/" {
+        format!("/{segment}")
+    } else {
+        format!("{parent}/{segment}")
+    }
+}
+
+fn escape_path_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
 }
 
 /// Find the best matching element function based on JSON fields.

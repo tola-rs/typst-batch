@@ -45,6 +45,13 @@ pub enum CompileError {
         message: String,
     },
 
+    /// Input construction failed.
+    #[error("{message}")]
+    Input {
+        /// Error message from input construction.
+        message: String,
+    },
+
     /// File I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -74,6 +81,13 @@ impl CompileError {
     /// Create an HTML export error.
     pub fn html_export(message: impl Into<String>) -> Self {
         Self::HtmlExport {
+            message: message.into(),
+        }
+    }
+
+    /// Create an input construction error.
+    pub fn input(message: impl Into<String>) -> Self {
+        Self::Input {
             message: message.into(),
         }
     }

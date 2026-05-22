@@ -13,9 +13,14 @@ pub enum ConvertError {
     #[error("expected JSON object, got {0}")]
     NotObject(&'static str),
 
-    /// Unknown element type (no matching element function found).
-    #[error("unknown element: {0}")]
-    UnknownElement(String),
+    /// Content that cannot be reconstructed from Typst query JSON.
+    #[error("unsupported content at {path}: {func}")]
+    Unsupported {
+        /// Slash-separated path where the content was found.
+        path: String,
+        /// Typst content function name.
+        func: String,
+    },
 
     /// Missing required field.
     #[error("missing required field: {0}")]
